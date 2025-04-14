@@ -3,19 +3,17 @@ import uuid
 import requests
 import json
 from urllib.parse import urlparse, parse_qs
-import logging
 import re
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 import urllib.parse
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi.responses import PlainTextResponse
 
-# Configure logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+from logger_config import setup_logger
+
+logger = setup_logger("get-m3u8-stream")
 
 app = FastAPI(
     title="TeraBox Streaming API",
@@ -61,6 +59,13 @@ class StreamingResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
 
+class CookieUpdateRequest(BaseModel):
+    cookie_data: str
+
+class CookieUpdateResponse(BaseModel):
+    success: bool
+    message: str
+
 # Define the cookie string from the successful curl command
 COOKIE_STRING = (
     "browserid=nxk3JtCDsYjPBd3IRAeZafvjnxE3gG9r08eS0BEx4gFNEosSiGBOmPmzNf5Fw9Zd_jH2EvbcG5wNCCRY; "
@@ -75,8 +80,6 @@ COOKIE_STRING = (
     "ab_sr=1.0.1_YzIxMGVmZDI0ZjE1ODgzMDU2NjExZDYzMTdlODY2NmQ0ZDQ2ZGE0ZGUzMGVhODBlOTBmNTFiNThhZmE2YWVlZWU3OWQzMDY4N2I0NmNmNWVjMmRkZjg5MWViMmU2ZWYyMjdjYWZkN2Q0MWFlZjZlNDlmZDk2YzM3OTUyYTMzZGFjZjkxYzc3MTJkMDYwYTUwODVmMWY4NzJjNjljOGJkMg==; "
     "_ga_06ZNKL8C2E=GS1.1.1744481055.25.1.1744481106.9.0.0"
 )
-
-
 
 # Parse cookies into a dictionary
 COOKIES = {k.strip(): v.strip() for k, v in (cookie.split('=', 1) for cookie in COOKIE_STRING.split('; '))}
@@ -373,6 +376,90 @@ async def health_check():
     """Health check endpoint to verify API status"""
     return {"status": "healthy", "version": "1.0.0"}
 
+def parse_netscape_cookie(cookie_data: str) -> Dict[str, str]:
+    """
+    Parse Netscape cookie format into a dictionary suitable for requests.Session.cookies
+    
+    Example format:
+    # Netscape HTTP Cookie File
+    # http://curl.haxx.se/rfc/cookie_spec.html
+    # This is a generated file!  Do not edit.
+    
+    .1024tera.com	TRUE	/	FALSE	1748070638	browserid	nxk3JtCDsYjPBd3IRAeZafvjnxE3gG9r08eS0BEx4gFNEosSiGBOmPmzNf5Fw9Zd_jH2EvbcG5wNCCRY
+    
+    Args:
+        cookie_data: String containing cookies in Netscape format
+        
+    Returns:
+        Dictionary mapping cookie names to values
+    """
+    cookie_dict = {}
+    
+    try:
+        # Split the input data into lines
+        lines = cookie_data.strip().split('\n')
+        
+        for line in lines:
+            # Skip empty lines and comments
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            # Handle the tab-separated format
+            # Domain, flag, path, secure, expiration, name, value
+            parts = re.split(r'\s+', line)
+            
+            # Make sure we have enough parts for a valid cookie entry
+            if len(parts) >= 7:
+                domain = parts[0]
+                name = parts[5]
+                value = parts[6]
+                
+                cookie_dict[name] = value
+                logger.info(f"Parsed cookie: {name}={value[:10]}... for domain {domain}")
+        
+        logger.info(f"Successfully parsed {len(cookie_dict)} cookies")
+        return cookie_dict
+    
+    except Exception as e:
+        logger.error(f"Error parsing Netscape cookie format: {str(e)}")
+        return {}
+
+@app.post("/update_cookie", response_model=CookieUpdateResponse)
+async def update_cookie(request: CookieUpdateRequest):
+    """
+    Update the cookies used for TeraBox API requests
+    
+    Args:
+        request: Contains cookie_data in Netscape format
+        
+    Returns:
+        Success status and message
+    """
+    try:
+        global COOKIES
+        
+        # Parse the provided cookie data
+        new_cookies = parse_netscape_cookie(request.cookie_data)
+        
+        if not new_cookies:
+            raise HTTPException(status_code=400, detail="Failed to parse cookie data")
+            
+        # Update the global COOKIES dictionary
+        COOKIES.update(new_cookies)
+        
+        # Update the session cookies
+        session.cookies.update(new_cookies)
+        
+        logger.info(f"Successfully updated cookies with {len(new_cookies)} new values")
+        return {"success": True, "message": f"Successfully updated {len(new_cookies)} cookies"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating cookies: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating cookies: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("get-m3u8-stream:app", host="0.0.0.0", port=8080, reload=True)
