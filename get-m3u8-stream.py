@@ -464,67 +464,38 @@ async def update_cookie(request: CookieUpdateRequest):
 @app.get("/get_m3u8_stream_fast/{current_url:path}")
 async def get_m3u8_stream_fast(current_url: str):
     try:
-        log.info(f"Stream Fast Request for URL: {current_url}")
         decoded_url = urllib.parse.unquote(current_url)
-        log.info(f"Decoded URL: {decoded_url}")
 
-        # Get the actual streaming URL from the share URL
+        # Get the actual streaming URL from the share URL, not the share URL itself
         stream_url = await get_m3u8_fast_stream(current_url)
         if not stream_url:
-            raise HTTPException(status_code=404,
-                                detail="Failed to generate streaming URL from share URL")
-
-        log.info(f"Generated streaming URL: {stream_url}")
+            raise HTTPException(status_code=404, detail="Failed to generate streaming URL")
 
         # Use the streaming URL, not the original share URL
         headers = {
-            'sec-ch-ua-platform':'"Windows"',
-            'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-            'sec-ch-ua':'"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-            'sec-ch-ua-mobile':'?0',
-            'accept':'*/*',
-            'sec-fetch-site':'same-origin',
-            'sec-fetch-mode':'cors',
-            'sec-fetch-dest':'empty',
-            'referer': stream_url,
-            'accept-encoding':'gzip, deflate, br, zstd',
-            'accept-language':'en-GB,en-US;q=0.9,en;q=0.8',
-            'priority':'u=1, i',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.terabox.app/',
+            'Origin': 'https://www.terabox.app',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
             'cookie': COOKIE_STRING
         }
 
-        # Make request to get the M3U8 content from the STREAMING URL, not the share URL
+        # Get the M3U8 content from the stream URL (not the original URL)
         response = requests.get(stream_url, headers=headers)
 
-        log.info(f"Response status: {response.status_code}")
-
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code,
-                                detail=f"Failed to get M3U8 stream: {response.text[:100]}")
+            raise HTTPException(status_code=response.status_code)
 
-        # Check if response is actual M3U8 content
-        m3u8_content = response.text
-        first_line = m3u8_content.split('\n')[0] if m3u8_content else ""
-
-        if not first_line.startswith('#EXTM3U'):
-            log.error(f"Response is not a valid M3U8 playlist: {m3u8_content[:200]}")
-            raise HTTPException(status_code=400,
-                                detail="Response from TeraBox is not a valid M3U8 playlist")
-
-        # Return as plain text with the right content type
-        headers = {
-            'Content-Type': 'application/vnd.apple.mpegurl',
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*'
-        }
-
+        # Return the content directly
         return Response(
-            content=m3u8_content,
-            headers=headers
+            content=response.text,
+            media_type="application/vnd.apple.mpegurl"
         )
     except Exception as e:
-        log.error(f"Error processing M3U8 stream: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def main():

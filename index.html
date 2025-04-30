@@ -473,19 +473,27 @@
                 }
 
                 hls = new Hls({
-                    debug: false,
                     xhrSetup: function(xhr, url) {
-                        // Skip proxying for URLs that are already proxied, API URLs or blob URLs
-                        if (PROXY_WORKERS.some(worker => url.startsWith(worker)) || 
-                            url.startsWith('https://api.ronnieverse.site') ||
-                            url.startsWith('https://ronnieverse.site') ||
-                            url.startsWith('blob:')) {
+                        // For TeraBox/freeterabox domains, proxy through our worker
+                        if (url.includes('freeterabox.com') || 
+                            url.includes('1024tera.com') || 
+                            url.includes('terabox.com')) {
+                            
+                            // Use our dedicated CORS proxy worker
+                            const proxyUrl = 'https://terabox-hls-proxy.mohdamir7505.workers.dev/?url=';
+                            const newUrl = proxyUrl + encodeURIComponent(url);
+                            xhr.open('GET', newUrl, true);
+                        } 
+                        // For blob URLs or API URLs, access directly
+                        else if (url.startsWith('blob:') || 
+                                url.startsWith('https://api.ronnieverse.site') || 
+                                url.startsWith('https://ronnieverse.site')) {
                             xhr.open('GET', url, true);
-                        } else {
-                            // Get the next proxy worker in rotation
+                        }
+                        // For all other URLs, use round-robin proxying
+                        else {
                             const proxyWorker = getNextProxyWorker();
                             const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
-                            console.log(`Proxying through: ${proxyWorker}`);
                             xhr.open('GET', newUrl, true);
                         }
                         xhr.withCredentials = false;
