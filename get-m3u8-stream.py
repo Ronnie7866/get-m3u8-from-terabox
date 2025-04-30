@@ -123,8 +123,8 @@ def extract_surl_from_url(url: str) -> str | None:
             url = url[1:]
 
         # First try to get surl from query parameters (embed URLs)
-        parsed_url = urllib.urlparse(url)
-        query_params = urllib.parse_qs(parsed_url.query)
+        parsed_url = urllib.parse.urlparse(url)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
         if 'surl' in query_params:
             surl = query_params['surl'][0]
             # Remove leading '1' from surl if present
