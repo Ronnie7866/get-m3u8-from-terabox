@@ -6,7 +6,7 @@ from typing import Optional, Dict
 
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -462,44 +462,69 @@ async def update_cookie(request: CookieUpdateRequest):
 
 
 @app.get("/get_m3u8_stream_fast/{current_url:path}")
-async def get_m3u8_stream_fast(current_url: str) -> str :
-    """
-    Get the M3U8 stream URL from a TeraBox sharing URL.
+async def get_m3u8_stream_fast(current_url: str):
+    try:
+        log.info(f"Stream Fast Request for URL: {current_url}")
+        decoded_url = urllib.parse.unquote(current_url)
+        log.info(f"Decoded URL: {decoded_url}")
 
-    Args:
-        current_url: The TeraBox sharing URL.
+        # Get the actual streaming URL from the share URL
+        stream_url = await get_m3u8_fast_stream(current_url)
+        if not stream_url:
+            raise HTTPException(status_code=404,
+                                detail="Failed to generate streaming URL from share URL")
 
-    Returns:
-        The M3U8 stream URL.
-    """
-    decode_url = urllib.parse.unquote(current_url)
-    headers = {
-        'sec-ch-ua-platform':'"Windows"',
-        'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-        'sec-ch-ua':'"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-        'sec-ch-ua-mobile':'?0',
-        'accept':'*/*',
-        'sec-fetch-site':'same-origin',
-        'sec-fetch-mode':'cors',
-        'sec-fetch-dest':'empty',
-        'referer':f'{decode_url}]',
-        'accept-encoding':'gzip, deflate, br, zstd',
-        'accept-language':'en-GB,en-US;q=0.9,en;q=0.8',
-        'priority':'u=1, i',
-        'cookie':f'{COOKIE_STRING}'
-    }
+        log.info(f"Generated streaming URL: {stream_url}")
 
+        # Use the streaming URL, not the original share URL
+        headers = {
+            'sec-ch-ua-platform':'"Windows"',
+            'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+            'sec-ch-ua':'"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+            'sec-ch-ua-mobile':'?0',
+            'accept':'*/*',
+            'sec-fetch-site':'same-origin',
+            'sec-fetch-mode':'cors',
+            'sec-fetch-dest':'empty',
+            'referer': stream_url,
+            'accept-encoding':'gzip, deflate, br, zstd',
+            'accept-language':'en-GB,en-US;q=0.9,en;q=0.8',
+            'priority':'u=1, i',
+            'cookie': COOKIE_STRING
+        }
 
-    stream_url_fast = await get_m3u8_fast_stream(current_url)
-    if stream_url_fast:
-        log.info(f"Stream URL Fast: {stream_url_fast}")
-        response = requests.get(stream_url_fast, headers=headers)
-        with open("response0.txt", "w", encoding="utf-8") as file:
-            file.write(response.text)
-            print("Response saved to response.txt")
-        return stream_url_fast
-    else:
-        raise HTTPException(status_code=404, detail="M3U8 stream Fast URL not found")
+        # Make request to get the M3U8 content from the STREAMING URL, not the share URL
+        response = requests.get(stream_url, headers=headers)
+
+        log.info(f"Response status: {response.status_code}")
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code,
+                                detail=f"Failed to get M3U8 stream: {response.text[:100]}")
+
+        # Check if response is actual M3U8 content
+        m3u8_content = response.text
+        first_line = m3u8_content.split('\n')[0] if m3u8_content else ""
+
+        if not first_line.startswith('#EXTM3U'):
+            log.error(f"Response is not a valid M3U8 playlist: {m3u8_content[:200]}")
+            raise HTTPException(status_code=400,
+                                detail="Response from TeraBox is not a valid M3U8 playlist")
+
+        # Return as plain text with the right content type
+        headers = {
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*'
+        }
+
+        return Response(
+            content=m3u8_content,
+            headers=headers
+        )
+    except Exception as e:
+        log.error(f"Error processing M3U8 stream: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 def main():

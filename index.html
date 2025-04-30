@@ -199,73 +199,6 @@
             }
         }
 
-        function loadVideo(streamUrl) {
-            const video = document.getElementById('videoPlayer');
-            const currentTime = video.currentTime;
-            const wasPlaying = !video.paused;
-
-            if (Hls.isSupported()) {
-                if (hls) {
-                    hls.destroy();
-                }
-
-                hls = new Hls({
-                    xhrSetup: function(xhr, url) {
-                        // Skip proxying for URLs that are already proxied or API URLs
-                        if (PROXY_WORKERS.some(worker => url.startsWith(worker)) || 
-                            url.startsWith('https://api.ronnieverse.site')) {
-                            xhr.open('GET', url, true);
-                        } else {
-                            // Get the next proxy worker in rotation
-                            const proxyWorker = getNextProxyWorker();
-                            const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
-                            console.log(`Proxying through: ${proxyWorker}`);
-                            xhr.open('GET', newUrl, true);
-                        }
-                        xhr.withCredentials = false;
-                    },
-                    // Implement retry logic for segment loading failures
-                    fragLoadingMaxRetry: 5,
-                    fragLoadingRetryDelay: 1000,
-                    manifestLoadingMaxRetry: 5,
-                    manifestLoadingRetryDelay: 1000
-                });
-
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                    if (data.fatal) {
-                        updateStatus('Error loading video');
-                        console.error('Fatal HLS error:', data);
-                    }
-                });
-
-                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.currentTime = currentTime;
-                    updateStatus('Ready to play');
-                    if (wasPlaying) {
-                        video.play().catch(() => {
-                            updateStatus('Click play to start');
-                        });
-                    }
-                });
-
-                hls.loadSource(streamUrl);
-                hls.attachMedia(video);
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                video.src = streamUrl;
-                video.addEventListener('loadedmetadata', function() {
-                    video.currentTime = currentTime;
-                    updateStatus('Ready to play');
-                    if (wasPlaying) {
-                        video.play().catch(() => {
-                            updateStatus('Click play to start');
-                        });
-                    }
-                });
-            } else {
-                updateStatus('HLS not supported in this browser');
-            }
-        }
-
         async function changeQuality(quality) {
             const urlParams = new URLSearchParams(window.location.search);
             const shareUrl = urlParams.get('share');
@@ -282,6 +215,9 @@
 
             currentQuality = quality;
             updateQualityButtons(quality);
+
+            // Cleanup any existing blob URLs
+            cleanupBlobUrls();
 
             if (streamKey) {
                 // Get stream URL from backend using key
@@ -301,29 +237,67 @@
                 // Update direct stream URL with new quality and use your existing backend endpoint
                 const updatedStreamUrl = streamUrl.replace(/type=M3U8_AUTO_[0-9]+/, `type=${quality}`);
                 try {
-                    // Use the existing backend endpoint to get authenticated HLS
-                    const encodedUrl = encodeURIComponent(updatedStreamUrl);
-                    const fullUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
-                    
                     updateStatus('Fetching authenticated stream...', true);
-                    const response = await fetch(fullUrl);
+                    
+                    // Handle either direct stream URL or terabox sharing link
+                    let targetUrl;
+                    if (updatedStreamUrl.includes('1024tera.com/share/streaming') || 
+                        updatedStreamUrl.includes('terabox.com/share/streaming')) {
+                        // Direct streaming URL - use your stream_fast endpoint
+                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    } else if (updatedStreamUrl.includes('sharing/link') || 
+                               updatedStreamUrl.includes('teraboxdl.site') ||
+                               updatedStreamUrl.includes('terasharelink.com')) {
+                        // It's a sharing link - use your get_m3u8 endpoint
+                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8?url=${encodedUrl}&quality=${quality.replace('M3U8_AUTO_', '')}`;
+                    } else {
+                        // Try with stream_fast as fallback
+                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    }
+                    
+                    console.log(`Fetching from: ${targetUrl}`);
+                    const response = await fetch(targetUrl);
                     
                     if (!response.ok) {
-                        throw new Error(`Failed to get authenticated stream: ${response.status}`);
+                        throw new Error(`Failed to get stream: ${response.status}`);
                     }
                     
-                    const data = await response.json();
-                    if (data.m3u8_url) {
-                        loadVideo(data.m3u8_url);
-                    } else {
-                        throw new Error('No M3U8 URL in response');
+                    // Get the M3U8 content as text
+                    const m3u8Content = await response.text();
+                    
+                    if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
+                        console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
+                        throw new Error('Invalid M3U8 content received');
                     }
+                    
+                    console.log('Received M3U8 content:', m3u8Content.substring(0, 200));
+                    
+                    // Create a blob URL from the M3U8 content
+                    const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    // Store the blob URL for later cleanup
+                    window.currentBlobUrl = blobUrl;
+                    
+                    // Load the blob URL
+                    loadVideo(blobUrl);
                 } catch (error) {
                     console.error('Error fetching authenticated stream:', error);
                     updateStatus(`Error: ${error.message}`);
                 }
             } else {
                 updateStatus('No video URL provided');
+            }
+        }
+
+        // Function to clean up any blob URLs we've created
+        function cleanupBlobUrls() {
+            if (window.currentBlobUrl) {
+                URL.revokeObjectURL(window.currentBlobUrl);
+                window.currentBlobUrl = null;
             }
         }
 
@@ -377,6 +351,9 @@
                 streamUrl
             });
 
+            // Cleanup any existing blob URLs
+            cleanupBlobUrls();
+
             // First priority: Use streamKey (either from URL or Telegram startapp)
             if (streamKey) {
                 updateStatus('Fetching stream URL using key...', true);
@@ -418,25 +395,52 @@
             if (streamUrl) {
                 updateStatus('Fetching authenticated stream...', true);
                 try {
-                    // Use the existing backend endpoint to get authenticated HLS
-                    const encodedUrl = encodeURIComponent(streamUrl);
-                    const fullUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    // Handle either direct stream URL or terabox sharing link
+                    let targetUrl;
+                    if (streamUrl.includes('1024tera.com/share/streaming') || 
+                        streamUrl.includes('terabox.com/share/streaming')) {
+                        // Direct streaming URL - use your stream_fast endpoint
+                        const encodedUrl = encodeURIComponent(streamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    } else if (streamUrl.includes('sharing/link') || 
+                               streamUrl.includes('teraboxdl.site') ||
+                               streamUrl.includes('terasharelink.com')) {
+                        // It's a sharing link - use your get_m3u8 endpoint
+                        const encodedUrl = encodeURIComponent(streamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8?url=${encodedUrl}&quality=${currentQuality.replace('M3U8_AUTO_', '')}`;
+                    } else {
+                        // Try with stream_fast as fallback
+                        const encodedUrl = encodeURIComponent(streamUrl);
+                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    }
                     
-                    console.log(`Fetching authenticated stream from: ${fullUrl}`);
-                    const response = await fetch(fullUrl);
+                    console.log(`Fetching from: ${targetUrl}`);
+                    const response = await fetch(targetUrl);
                     
                     if (!response.ok) {
-                        throw new Error(`Failed to get authenticated stream: ${response.status}`);
+                        throw new Error(`Failed to get stream: ${response.status}`);
                     }
                     
-                    const data = await response.json();
-                    if (data.m3u8_url) {
-                        console.log(`Got authenticated M3U8 URL: ${data.m3u8_url.substring(0, 50)}...`);
-                        loadVideo(data.m3u8_url);
-                        return;
-                    } else {
-                        throw new Error('No M3U8 URL in response');
+                    // Get the M3U8 content as text
+                    const m3u8Content = await response.text();
+                    
+                    if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
+                        console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
+                        throw new Error('Invalid M3U8 content received');
                     }
+                    
+                    console.log('Received M3U8 content:', m3u8Content.substring(0, 200));
+                    
+                    // Create a blob URL from the M3U8 content
+                    const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    // Store the blob URL for later cleanup
+                    window.currentBlobUrl = blobUrl;
+                    
+                    // Load the blob URL
+                    loadVideo(blobUrl);
+                    return;
                 } catch (error) {
                     console.error('Error fetching authenticated stream:', error);
                     updateStatus(`Error: ${error.message}`);
@@ -445,6 +449,93 @@
 
             // No usable URL provided
             updateStatus('No video URL provided. Use ?share= or ?start= parameter or open from Telegram bot.');
+        }
+        
+        // Clean up resources when page is unloaded
+        window.addEventListener('beforeunload', function() {
+            cleanupBlobUrls();
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+        });
+
+        function loadVideo(streamUrl) {
+            const video = document.getElementById('videoPlayer');
+            const currentTime = video.currentTime;
+            const wasPlaying = !video.paused;
+
+            updateStatus('Loading video stream...', true);
+
+            if (Hls.isSupported()) {
+                if (hls) {
+                    hls.destroy();
+                }
+
+                hls = new Hls({
+                    debug: false,
+                    xhrSetup: function(xhr, url) {
+                        // Skip proxying for URLs that are already proxied, API URLs or blob URLs
+                        if (PROXY_WORKERS.some(worker => url.startsWith(worker)) || 
+                            url.startsWith('https://api.ronnieverse.site') ||
+                            url.startsWith('https://ronnieverse.site') ||
+                            url.startsWith('blob:')) {
+                            xhr.open('GET', url, true);
+                        } else {
+                            // Get the next proxy worker in rotation
+                            const proxyWorker = getNextProxyWorker();
+                            const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
+                            console.log(`Proxying through: ${proxyWorker}`);
+                            xhr.open('GET', newUrl, true);
+                        }
+                        xhr.withCredentials = false;
+                    },
+                    // Implement retry logic for segment loading failures
+                    fragLoadingMaxRetry: 5,
+                    fragLoadingRetryDelay: 1000,
+                    manifestLoadingMaxRetry: 5,
+                    manifestLoadingRetryDelay: 1000
+                });
+
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        console.error('Fatal HLS error:', data);
+                        updateStatus(`Loading error: ${data.type}. Try another quality.`);
+                    }
+                });
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.currentTime = currentTime;
+                    updateStatus('Ready to play');
+                    if (wasPlaying) {
+                        video.play().catch(() => {
+                            updateStatus('Click play to start');
+                        });
+                    }
+                });
+
+                try {
+                    console.log(`Loading HLS source: ${streamUrl.substring(0, 30)}...`);
+                    hls.loadSource(streamUrl);
+                    hls.attachMedia(video);
+                } catch (error) {
+                    console.error('Error loading HLS source:', error);
+                    updateStatus('Error loading video');
+                }
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = streamUrl;
+                video.addEventListener('loadedmetadata', function() {
+                    video.currentTime = currentTime;
+                    updateStatus('Ready to play');
+                    if (wasPlaying) {
+                        video.play().catch(() => {
+                            updateStatus('Click play to start');
+                        });
+                    }
+                });
+            } else {
+                updateStatus('HLS not supported in this browser');
+            }
         }
 
         // Add click handlers for quality buttons
