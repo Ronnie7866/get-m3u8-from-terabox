@@ -109,6 +109,8 @@
         const PROXY_WORKERS = [
             'https://terabox-hls-proxy.mohdamir7505.workers.dev',
             'https://terabox-hls-proxy-2.terbox-url-fixer.workers.dev'
+            'https://terabox-hls-proxy-3.eron8318.workers.dev',
+            'https://terabox-hls-proxy-4.ronnie6667770.workers.dev',
         ];
         
         // Counter for load balancing between workers
@@ -142,11 +144,7 @@
         async function fetchStreamUrlByKey(key) {
             try {
                 updateStatus('Retrieving video stream by key...', true);
-                console.log(`Fetching stream URL with key: ${key} from ${APP_API_URL}/get_stream_url?key=${key}`);
-
                 const response = await fetch(`${APP_API_URL}/get_stream_url?key=${key}`);
-                console.log("Response status:", response.status);
-
                 if (!response.ok) {
                     let errorDetail = "Unknown error";
                     try {
@@ -161,8 +159,6 @@
                 }
 
                 const data = await response.json();
-                console.log("Received data:", data);
-
                 if (!data.url) {
                     throw new Error("Received empty stream URL from server");
                 }
@@ -258,7 +254,6 @@
                         targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
                     }
                     
-                    console.log(`Fetching from: ${targetUrl}`);
                     const response = await fetch(targetUrl);
                     
                     if (!response.ok) {
@@ -273,8 +268,7 @@
                         throw new Error('Invalid M3U8 content received');
                     }
                     
-                    console.log('Received M3U8 content:', m3u8Content.substring(0, 200));
-                    
+
                     // Create a blob URL from the M3U8 content
                     const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
                     const blobUrl = URL.createObjectURL(blob);
@@ -314,7 +308,6 @@
                 // Get the startapp parameter from Telegram WebApp
                 if (tgWebApp.initDataUnsafe && tgWebApp.initDataUnsafe.start_param) {
                     startParam = tgWebApp.initDataUnsafe.start_param;
-                    console.log("Got startapp parameter:", startParam);
                 }
             }
 
@@ -344,7 +337,6 @@
                 }
             }
 
-            console.log("Processing with parameters:", {
                 startParam,
                 streamKey,
                 shareUrl,
@@ -357,11 +349,9 @@
             // First priority: Use streamKey (either from URL or Telegram startapp)
             if (streamKey) {
                 updateStatus('Fetching stream URL using key...', true);
-                console.log("Fetching using key:", streamKey);
                 try {
                     const streamUrlFromKey = await fetchStreamUrlByKey(streamKey);
                     if (streamUrlFromKey) {
-                        console.log("Successfully got stream URL from key:", streamUrlFromKey.substring(0, 50) + "...");
                         loadVideo(streamUrlFromKey);
                         return;
                     } else {
@@ -414,7 +404,6 @@
                         targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
                     }
                     
-                    console.log(`Fetching from: ${targetUrl}`);
                     const response = await fetch(targetUrl);
                     
                     if (!response.ok) {
@@ -428,9 +417,7 @@
                         console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
                         throw new Error('Invalid M3U8 content received');
                     }
-                    
-                    console.log('Received M3U8 content:', m3u8Content.substring(0, 200));
-                    
+
                     // Create a blob URL from the M3U8 content
                     const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
                     const blobUrl = URL.createObjectURL(blob);
@@ -523,7 +510,6 @@
                 });
 
                 try {
-                    console.log(`Loading HLS source: ${streamUrl.substring(0, 30)}...`);
                     hls.loadSource(streamUrl);
                     hls.attachMedia(video);
                 } catch (error) {
