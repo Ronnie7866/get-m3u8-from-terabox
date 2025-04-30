@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HLS Video Player</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            text-align: center;
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        video {
+            width: 100%;
+            max-width: 800px;
+            margin-top: 20px;
+            background: #000;
+            border-radius: 8px;
+        }
+        #status {
+            margin: 10px 0;
+            color: #888;
+        }
+        .quality-container {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 15px auto;
+            max-width: 800px;
+        }
+        .quality-btn {
+            padding: 10px 20px;
+            background: #2c2c2c;
+            color: #fff;
+            border: 2px solid #3a3a3a;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            min-width: 90px;
+        }
+        .quality-btn:hover {
+            background: #3a3a3a;
+            border-color: #4a4a4a;
+        }
+        .quality-btn.active {
+            background: #4CAF50;
+            border-color: #45a049;
+        }
+        .promo-banner {
+            margin: 20px auto;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+            max-width: 800px;
+        }
+        .promo-banner a {
+            color: #4CAF50;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .promo-banner a:hover {
+            text-decoration: underline;
+        }
+        .loader {
+            border: 3px solid #333;
+            border-radius: 50%;
+            border-top: 3px solid #4CAF50;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <h2>TeraBox Video Player</h2>
+    <div class="promo-banner">
+        Download more content at <a href="https://teraboxdl.site" target="_blank">teraboxdl.site</a>
+    </div>
+    <div class="quality-container">
+        <button class="quality-btn active" data-quality="M3U8_AUTO_360">360p</button>
+        <button class="quality-btn" data-quality="M3U8_AUTO_480">480p</button>
+        <button class="quality-btn" data-quality="M3U8_AUTO_720">720p</button>
+        <button class="quality-btn" data-quality="M3U8_AUTO_1080">1080p</button>
+    </div>
+    <div id="status"></div>
+    <video id="videoPlayer" controls></video>
+
+    <script>
+        let hls = null;
+        let currentQuality = 'M3U8_AUTO_360';
+        const API_BASE_URL = 'https://api.ronnieverse.site';
+        const APP_API_URL = 'https://ronnieverse.site'; // URL for stream key API
+        
+        // Configure proxy workers
+        const PROXY_WORKERS = [
+            'https://terabox-hls-proxy.mohdamir7505.workers.dev',
+            'https://terabox-hls-proxy-2.terbox-url-fixer.workers.dev'
+        ];
+        
+        // Counter for load balancing between workers
+        let requestCounter = 0;
+
+        function updateStatus(message, isLoading = false) {
+            const statusEl = document.getElementById('status');
+            if (isLoading) {
+                statusEl.innerHTML = `<span class="loader"></span> ${message}`;
+            } else {
+                statusEl.textContent = message;
+            }
+        }
+
+        function updateQualityButtons(activeQuality) {
+            document.querySelectorAll('.quality-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.quality === activeQuality) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        // Function to get the next worker in a round-robin fashion
+        function getNextProxyWorker() {
+            const workerIndex = requestCounter % PROXY_WORKERS.length;
+            requestCounter++;
+            return PROXY_WORKERS[workerIndex];
+        }
+
+        async function fetchStreamUrlByKey(key) {
+            try {
+                updateStatus('Retrieving video stream by key...', true);
+                console.log(`Fetching stream URL with key: ${key} from ${APP_API_URL}/get_stream_url?key=${key}`);
+
+                const response = await fetch(`${APP_API_URL}/get_stream_url?key=${key}`);
+                console.log("Response status:", response.status);
+
+                if (!response.ok) {
+                    let errorDetail = "Unknown error";
+                    try {
+                        const errorData = await response.json();
+                        errorDetail = errorData.detail || "Server error";
+                    } catch (e) {
+                        errorDetail = await response.text() || "Failed to parse error response";
+                    }
+
+                    console.error(`API Error (${response.status}):`, errorDetail);
+                    throw new Error(`${errorDetail} (Status: ${response.status})`);
+                }
+
+                const data = await response.json();
+                console.log("Received data:", data);
+
+                if (!data.url) {
+                    throw new Error("Received empty stream URL from server");
+                }
+
+                return data.url;
+            } catch (error) {
+                console.error('Error fetching stream URL by key:', error);
+                updateStatus(`Error: ${error.message}`);
+                return null;
+            }
+        }
+
+        async function fetchM3U8FromAPI(shareUrl, quality) {
+            try {
+                updateStatus('Retrieving video stream...', true);
+
+                // Extract quality number without prefix
+                const qualityNum = quality.replace('M3U8_AUTO_', '');
+
+                // Call the FastAPI endpoint
+                const response = await fetch(`${API_BASE_URL}/get_m3u8?url=${encodeURIComponent(shareUrl)}&quality=${qualityNum}`);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to retrieve M3U8 URL');
+                }
+
+                const data = await response.json();
+                return data.m3u8_url;
+            } catch (error) {
+                console.error('Error fetching M3U8:', error);
+                updateStatus(`Error: ${error.message}`);
+                return null;
+            }
+        }
+
+        function loadVideo(streamUrl) {
+            const video = document.getElementById('videoPlayer');
+            const currentTime = video.currentTime;
+            const wasPlaying = !video.paused;
+
+            if (Hls.isSupported()) {
+                if (hls) {
+                    hls.destroy();
+                }
+
+                hls = new Hls({
+                    xhrSetup: function(xhr, url) {
+                        // Skip proxying for URLs that are already proxied or API URLs
+                        if (PROXY_WORKERS.some(worker => url.startsWith(worker)) || 
+                            url.startsWith('https://api.ronnieverse.site')) {
+                            xhr.open('GET', url, true);
+                        } else {
+                            // Get the next proxy worker in rotation
+                            const proxyWorker = getNextProxyWorker();
+                            const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
+                            console.log(`Proxying through: ${proxyWorker}`);
+                            xhr.open('GET', newUrl, true);
+                        }
+                        xhr.withCredentials = false;
+                    },
+                    // Implement retry logic for segment loading failures
+                    fragLoadingMaxRetry: 5,
+                    fragLoadingRetryDelay: 1000,
+                    manifestLoadingMaxRetry: 5,
+                    manifestLoadingRetryDelay: 1000
+                });
+
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        updateStatus('Error loading video');
+                        console.error('Fatal HLS error:', data);
+                    }
+                });
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.currentTime = currentTime;
+                    updateStatus('Ready to play');
+                    if (wasPlaying) {
+                        video.play().catch(() => {
+                            updateStatus('Click play to start');
+                        });
+                    }
+                });
+
+                hls.loadSource(streamUrl);
+                hls.attachMedia(video);
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = streamUrl;
+                video.addEventListener('loadedmetadata', function() {
+                    video.currentTime = currentTime;
+                    updateStatus('Ready to play');
+                    if (wasPlaying) {
+                        video.play().catch(() => {
+                            updateStatus('Click play to start');
+                        });
+                    }
+                });
+            } else {
+                updateStatus('HLS not supported in this browser');
+            }
+        }
+
+        async function changeQuality(quality) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const shareUrl = urlParams.get('share');
+            let streamUrl = urlParams.get('start');
+            let streamKey = urlParams.get('key');
+
+            // Check for Telegram WebApp startapp parameter
+            if (window.Telegram && window.Telegram.WebApp) {
+                const startAppParam = window.Telegram.WebApp.initDataUnsafe?.start_param || window.Telegram.WebApp.initData?.start_param;
+                if (startAppParam && !streamKey) {
+                    streamKey = startAppParam;
+                }
+            }
+
+            currentQuality = quality;
+            updateQualityButtons(quality);
+
+            if (streamKey) {
+                // Get stream URL from backend using key
+                let streamUrlFromKey = await fetchStreamUrlByKey(streamKey);
+                if (streamUrlFromKey) {
+                    // Replace quality in the URL
+                    streamUrlFromKey = streamUrlFromKey.replace(/type=M3U8_AUTO_[0-9]+/, `type=${quality}`);
+                    loadVideo(streamUrlFromKey);
+                }
+            } else if (shareUrl) {
+                // Use API to get M3U8 URL with new quality
+                const newM3u8Url = await fetchM3U8FromAPI(shareUrl, quality);
+                if (newM3u8Url) {
+                    loadVideo(newM3u8Url);
+                }
+            } else if (streamUrl) {
+                // Update direct stream URL with new quality and use your existing backend endpoint
+                const updatedStreamUrl = streamUrl.replace(/type=M3U8_AUTO_[0-9]+/, `type=${quality}`);
+                try {
+                    // Use the existing backend endpoint to get authenticated HLS
+                    const encodedUrl = encodeURIComponent(updatedStreamUrl);
+                    const fullUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    
+                    updateStatus('Fetching authenticated stream...', true);
+                    const response = await fetch(fullUrl);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Failed to get authenticated stream: ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    if (data.m3u8_url) {
+                        loadVideo(data.m3u8_url);
+                    } else {
+                        throw new Error('No M3U8 URL in response');
+                    }
+                } catch (error) {
+                    console.error('Error fetching authenticated stream:', error);
+                    updateStatus(`Error: ${error.message}`);
+                }
+            } else {
+                updateStatus('No video URL provided');
+            }
+        }
+
+        async function initPlayer() {
+            updateStatus('Initializing player...', true);
+
+            // Initialize Telegram WebApp if available
+            let startParam = null;
+            if (window.Telegram && window.Telegram.WebApp) {
+                const tgWebApp = window.Telegram.WebApp;
+                tgWebApp.ready();
+                tgWebApp.expand();
+
+                // Get the startapp parameter from Telegram WebApp
+                if (tgWebApp.initDataUnsafe && tgWebApp.initDataUnsafe.start_param) {
+                    startParam = tgWebApp.initDataUnsafe.start_param;
+                    console.log("Got startapp parameter:", startParam);
+                }
+            }
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const shareUrl = urlParams.get('share');
+            const streamUrl = urlParams.get('start');
+            let streamKey = urlParams.get('key');
+
+            // Use startParam from Telegram if available
+            if (startParam && !streamKey) {
+                streamKey = startParam;
+            }
+
+            // Set initial quality from button state
+            document.querySelectorAll('.quality-btn').forEach(btn => {
+                if (btn.classList.contains('active')) {
+                    currentQuality = btn.dataset.quality;
+                }
+            });
+
+            // Extract quality from URL if present
+            if (streamUrl && streamUrl.includes('type=M3U8_AUTO_')) {
+                const match = streamUrl.match(/type=(M3U8_AUTO_[0-9]+)/);
+                if (match) {
+                    currentQuality = match[1];
+                    updateQualityButtons(currentQuality);
+                }
+            }
+
+            console.log("Processing with parameters:", {
+                startParam,
+                streamKey,
+                shareUrl,
+                streamUrl
+            });
+
+            // First priority: Use streamKey (either from URL or Telegram startapp)
+            if (streamKey) {
+                updateStatus('Fetching stream URL using key...', true);
+                console.log("Fetching using key:", streamKey);
+                try {
+                    const streamUrlFromKey = await fetchStreamUrlByKey(streamKey);
+                    if (streamUrlFromKey) {
+                        console.log("Successfully got stream URL from key:", streamUrlFromKey.substring(0, 50) + "...");
+                        loadVideo(streamUrlFromKey);
+                        return;
+                    } else {
+                        console.error("Received empty stream URL from key");
+                        updateStatus('Failed to get stream URL from key');
+                    }
+                } catch (error) {
+                    console.error("Error fetching stream URL by key:", error);
+                    updateStatus(`Error: ${error.message}`);
+                }
+            }
+
+            // Second priority: Use share URL
+            if (shareUrl) {
+                updateStatus('Fetching stream from share URL...', true);
+                try {
+                    const m3u8Url = await fetchM3U8FromAPI(shareUrl, currentQuality);
+                    if (m3u8Url) {
+                        loadVideo(m3u8Url);
+                        return;
+                    } else {
+                        updateStatus('Failed to get video stream from share URL');
+                    }
+                } catch (error) {
+                    console.error("Error fetching M3U8 from share URL:", error);
+                    updateStatus(`Error: ${error.message}`);
+                }
+            }
+
+            // Third priority: Use direct stream URL with backend authentication
+            if (streamUrl) {
+                updateStatus('Fetching authenticated stream...', true);
+                try {
+                    // Use the existing backend endpoint to get authenticated HLS
+                    const encodedUrl = encodeURIComponent(streamUrl);
+                    const fullUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+                    
+                    console.log(`Fetching authenticated stream from: ${fullUrl}`);
+                    const response = await fetch(fullUrl);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Failed to get authenticated stream: ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    if (data.m3u8_url) {
+                        console.log(`Got authenticated M3U8 URL: ${data.m3u8_url.substring(0, 50)}...`);
+                        loadVideo(data.m3u8_url);
+                        return;
+                    } else {
+                        throw new Error('No M3U8 URL in response');
+                    }
+                } catch (error) {
+                    console.error('Error fetching authenticated stream:', error);
+                    updateStatus(`Error: ${error.message}`);
+                }
+            }
+
+            // No usable URL provided
+            updateStatus('No video URL provided. Use ?share= or ?start= parameter or open from Telegram bot.');
+        }
+
+        // Add click handlers for quality buttons
+        document.querySelectorAll('.quality-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                changeQuality(btn.dataset.quality);
+            });
+        });
+
+        // Initialize the player when the page loads
+        window.addEventListener('load', initPlayer);
+    </script>
+</body>
+</html>

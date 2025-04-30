@@ -1,19 +1,20 @@
-import time
-import uuid
-import requests
-import json
-from urllib.parse import urlparse, parse_qs
 import re
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl
+import time
 import urllib.parse
-from typing import Optional, Dict, Any, List
-from fastapi.responses import PlainTextResponse
+import uuid
+from typing import Optional, Dict
 
+import requests
+import uvicorn
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
+
+from get_m3u8_stream_fast import get_m3u8_fast_stream
 from logger_config import setup_logger
 
-logger = setup_logger("get-m3u8-stream")
+log = setup_logger("get-m3u8-stream")
 
 app = FastAPI(
     title="TeraBox Streaming API",
@@ -98,7 +99,6 @@ DEFAULT_HEADERS = {
     'sec-ch-ua-platform': '"Windows"'
 }
 
-from urllib.parse import urlparse, parse_qs
 import json
 
 # Helper functions for save_terabox_video
@@ -123,14 +123,14 @@ def extract_surl_from_url(url: str) -> str | None:
             url = url[1:]
 
         # First try to get surl from query parameters (embed URLs)
-        parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
+        parsed_url = urllib.urlparse(url)
+        query_params = urllib.parse_qs(parsed_url.query)
         if 'surl' in query_params:
             surl = query_params['surl'][0]
             # Remove leading '1' from surl if present
             if surl.startswith('1'):
                 surl = surl[1:]
-            logger.info(f"Extracted surl from query params: {surl}")
+            log.info(f"Extracted surl from query params: {surl}")
             return surl
 
         # Then try to extract from path (direct share URLs)
@@ -140,7 +140,7 @@ def extract_surl_from_url(url: str) -> str | None:
             # Remove leading '1' from surl if present
             if surl.startswith('1'):
                 surl = surl[1:]
-            logger.info(f"Extracted surl from path: {surl}")
+            log.info(f"Extracted surl from path: {surl}")
             return surl
 
         # Try to extract URLs that are just the code or already in surl format
@@ -150,13 +150,13 @@ def extract_surl_from_url(url: str) -> str | None:
             # Remove leading '1' from surl if present
             if surl.startswith('1'):
                 surl = surl[1:]
-            logger.info(f"Extracted surl from direct format: {surl}")
+            log.info(f"Extracted surl from direct format: {surl}")
             return surl
 
-        logger.warning(f"No surl found in URL: {url}")
+        log.warning(f"No surl found in URL: {url}")
         return None
     except Exception as e:
-        logger.error(f"Error in extract_surl_from_url: {str(e)}")
+        log.error(f"Error in extract_surl_from_url: {str(e)}")
         return None
 
 def save_terabox_video(session: requests.Session, url: str, target_path: str = "/") -> bool:
@@ -175,17 +175,17 @@ def save_terabox_video(session: requests.Session, url: str, target_path: str = "
         text = response.text
         js_token = find_between(text, 'fn%28%22', '%22%29')
         if not js_token:
-            logger.error("Could not extract jsToken")
+            log.error("Could not extract jsToken")
             return False
         logid = find_between(text, 'dp-logid=', '&')
         if not logid:
-            logger.error("Could not extract dp-logid")
+            log.error("Could not extract dp-logid")
             return False
 
         # Step 2: Extract surl from the URL
         surl = extract_surl_from_url(url)
         if not surl:
-            logger.error("Could not extract surl from URL")
+            log.error("Could not extract surl from URL")
             return False
 
         # Step 3: GET /share/list to get the video's fs_id, share_id, and uk
@@ -198,24 +198,24 @@ def save_terabox_video(session: requests.Session, url: str, target_path: str = "
         response.raise_for_status()
         r_j = response.json()
         if r_j.get("errno") != 0:
-            logger.error(f"Failed to get file list: {r_j}")
+            log.error(f"Failed to get file list: {r_j}")
             return False
 
         file_list = r_j.get("list", [])
         if not file_list:
-            logger.error("No files found in the shared link")
+            log.error("No files found in the shared link")
             return False
         if len(file_list) > 1:
-            logger.error("URL points to multiple files; expected a single video")
+            log.error("URL points to multiple files; expected a single video")
             return False
         item = file_list[0]
         if item.get("isdir") == "1":
-            logger.error("URL points to a folder, not a single video")
+            log.error("URL points to a folder, not a single video")
             return False
 
         fs_id = str(item.get("fs_id", ""))
         if not fs_id:
-            logger.error("Could not extract fs_id")
+            log.error("Could not extract fs_id")
             return False
         share_id = str(r_j.get("share_id", ""))
         uk = str(r_j.get("uk", ""))
@@ -236,17 +236,17 @@ def save_terabox_video(session: requests.Session, url: str, target_path: str = "
         response.raise_for_status()
         result = response.json()
         if result.get("errno") == 0:
-            logger.info(f"Successfully saved video to {target_path}")
+            log.info(f"Successfully saved video to {target_path}")
             return True
         else:
-            logger.error(f"Failed to save video: {result}")
+            log.error(f"Failed to save video: {result}")
             return False
 
     except requests.RequestException as e:
-        logger.error(f"Network error occurred: {e}")
+        log.error(f"Network error occurred: {e}")
         return False
     except Exception as e:
-        logger.error(f"Unexpected error in save_terabox_video: {e}")
+        log.error(f"Unexpected error in save_terabox_video: {e}")
         return False
 
 # Initialize a session object
@@ -278,7 +278,7 @@ async def get_filename_from_terabox_url(url: str) -> Optional[str]:
             if parts and parts[0]:
                 filename = parts[0].strip()
                 if filename:  # Ensure it's not empty
-                    logger.info(f"Found filename from title: {filename}")
+                    log.info(f"Found filename from title: {filename}")
                     return filename
 
         # Method 2: Fallback to meta description
@@ -289,17 +289,17 @@ async def get_filename_from_terabox_url(url: str) -> Optional[str]:
             if parts and parts[0]:
                 filename = parts[0].strip()
                 if filename:
-                    logger.info(f"Found filename from meta description: {filename}")
+                    log.info(f"Found filename from meta description: {filename}")
                     return "/" + filename
 
-        logger.warning("Could not find filename in title or meta description")
+        log.warning("Could not find filename in title or meta description")
         return None
 
     except requests.RequestException as e:
-        logger.error(f"Error retrieving the page: {e}")
+        log.error(f"Error retrieving the page: {e}")
         return None
     except Exception as e:
-        logger.error(f"Error parsing the page: {e}")
+        log.error(f"Error parsing the page: {e}")
         return None
 
 async def get_streaming_url(video_filename: str, resolution: str) -> Optional[str]:
@@ -323,19 +323,19 @@ async def get_streaming_url(video_filename: str, resolution: str) -> Optional[st
     if response.headers.get('content-type', '').startswith('application/json'):
         data = response.json()
         if "m3u8" in data:
-            logger.info(f"Retrieved M3U8 URL: {data['m3u8']}")
+            log.info(f"Retrieved M3U8 URL: {data['m3u8']}")
             return data["m3u8"]
         else:
-            logger.warning(f"No 'm3u8' in JSON: {data}")
+            log.warning(f"No 'm3u8' in JSON: {data}")
             return None
     elif response.text.startswith("#EXTM3U"):
         token = str(uuid.uuid4())
         m3u8_storage[token] = (response.text, time.time())
         m3u8_url = f"https://api.ronnieverse.site/m3u8/{token}"  # Update domain if different
-        logger.info(f"Stored M3U8 content with token: {token}")
+        log.info(f"Stored M3U8 content with token: {token}")
         return m3u8_url
     else:
-        logger.warning(f"Unexpected response format: {response.text[:100]}...")
+        log.warning(f"Unexpected response format: {response.text[:100]}...")
         return None
 
 
@@ -367,7 +367,7 @@ async def get_m3u8(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        log.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # Health check endpoint
@@ -416,13 +416,13 @@ def parse_netscape_cookie(cookie_data: str) -> Dict[str, str]:
                 value = parts[6]
                 
                 cookie_dict[name] = value
-                logger.info(f"Parsed cookie: {name}={value[:10]}... for domain {domain}")
+                log.info(f"Parsed cookie: {name}={value[:10]}... for domain {domain}")
         
-        logger.info(f"Successfully parsed {len(cookie_dict)} cookies")
+        log.info(f"Successfully parsed {len(cookie_dict)} cookies")
         return cookie_dict
     
     except Exception as e:
-        logger.error(f"Error parsing Netscape cookie format: {str(e)}")
+        log.error(f"Error parsing Netscape cookie format: {str(e)}")
         return {}
 
 @app.post("/update_cookie", response_model=CookieUpdateResponse)
@@ -451,15 +451,60 @@ async def update_cookie(request: CookieUpdateRequest):
         # Update the session cookies
         session.cookies.update(new_cookies)
         
-        logger.info(f"Successfully updated cookies with {len(new_cookies)} new values")
+        log.info(f"Successfully updated cookies with {len(new_cookies)} new values")
         return {"success": True, "message": f"Successfully updated {len(new_cookies)} cookies"}
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating cookies: {str(e)}")
+        log.error(f"Error updating cookies: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error updating cookies: {str(e)}")
 
-if __name__ == "__main__":
-    import uvicorn
+
+@app.get("/get_m3u8_stream_fast/{current_url:path}")
+async def get_m3u8_stream_fast(current_url: str) -> str :
+    """
+    Get the M3U8 stream URL from a TeraBox sharing URL.
+
+    Args:
+        current_url: The TeraBox sharing URL.
+
+    Returns:
+        The M3U8 stream URL.
+    """
+    decode_url = urllib.parse.unquote(current_url)
+    headers = {
+        'sec-ch-ua-platform':'"Windows"',
+        'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+        'sec-ch-ua':'"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+        'sec-ch-ua-mobile':'?0',
+        'accept':'*/*',
+        'sec-fetch-site':'same-origin',
+        'sec-fetch-mode':'cors',
+        'sec-fetch-dest':'empty',
+        'referer':f'{decode_url}]',
+        'accept-encoding':'gzip, deflate, br, zstd',
+        'accept-language':'en-GB,en-US;q=0.9,en;q=0.8',
+        'priority':'u=1, i',
+        'cookie':f'{COOKIE_STRING}'
+    }
+
+
+    stream_url_fast = await get_m3u8_fast_stream(current_url)
+    if stream_url_fast:
+        log.info(f"Stream URL Fast: {stream_url_fast}")
+        response = requests.get(stream_url_fast, headers=headers)
+        with open("response0.txt", "w", encoding="utf-8") as file:
+            file.write(response.text)
+            print("Response saved to response.txt")
+        return stream_url_fast
+    else:
+        raise HTTPException(status_code=404, detail="M3U8 stream Fast URL not found")
+
+
+def main():
     uvicorn.run("get-m3u8-stream:app", host="0.0.0.0", port=8080, reload=True)
+
+
+if __name__ == "__main__":
+    main()
