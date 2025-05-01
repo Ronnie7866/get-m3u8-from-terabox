@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HLS Video Player</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
             text-align: center;
@@ -86,461 +85,353 @@
     </style>
 </head>
 <body>
-    <h2>TeraBox Video Player</h2>
-    <div class="promo-banner">
-        Download more content at <a href="https://teraboxdl.site" target="_blank">teraboxdl.site</a>
-    </div>
-    <div class="quality-container">
-        <button class="quality-btn active" data-quality="M3U8_AUTO_360">360p</button>
-        <button class="quality-btn" data-quality="M3U8_AUTO_480">480p</button>
-        <button class="quality-btn" data-quality="M3U8_AUTO_720">720p</button>
-        <button class="quality-btn" data-quality="M3U8_AUTO_1080">1080p</button>
-    </div>
-    <div id="status"></div>
-    <video id="videoPlayer" controls></video>
+<h2>TeraBox Video Player</h2>
+<div class="promo-banner">
+    Download more content at <a href="https://teraboxdl.site" target="_blank">teraboxdl.site</a>
+</div>
+<div class="quality-container">
+    <button class="quality-btn active" data-quality="M3U8_AUTO_360">360p</button>
+    <button class="quality-btn" data-quality="M3U8_AUTO_480">480p</button>
+    <button class="quality-btn" data-quality="M3U8_AUTO_720">720p</button>
+    <button class="quality-btn" data-quality="M3U8_AUTO_1080">1080p</button>
+</div>
+<div id="status"></div>
+<video id="videoPlayer" controls></video>
 
-    <script>
-        let hls = null;
-        let currentQuality = 'M3U8_AUTO_360';
-        const API_BASE_URL = 'https://api.ronnieverse.site';
-        const APP_API_URL = 'https://ronnieverse.site'; // URL for stream key API
-        
-        // Configure proxy workers
-        const PROXY_WORKERS = [
-            'https://terabox-hls-proxy.mohdamir7505.workers.dev',
-            'https://terabox-hls-proxy-2.terbox-url-fixer.workers.dev'
-            'https://terabox-hls-proxy-3.eron8318.workers.dev',
-            'https://terabox-hls-proxy-4.ronnie6667770.workers.dev',
-        ];
-        
-        // Counter for load balancing between workers
-        let requestCounter = 0;
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+    let hls = null;
+    let currentQuality = 'M3U8_AUTO_360';
+    const API_BASE_URL = 'https://api.ronnieverse.site';
 
-        function updateStatus(message, isLoading = false) {
-            const statusEl = document.getElementById('status');
-            if (isLoading) {
-                statusEl.innerHTML = `<span class="loader"></span> ${message}`;
+    // Configure proxy workers
+    const PROXY_WORKERS = [
+        'https://terabox-hls-proxy.mohdamir7505.workers.dev',
+        'https://terabox-hls-proxy-2.terbox-url-fixer.workers.dev',
+        'https://terabox-hls-proxy-3.eron8318.workers.dev',
+        'https://terabox-hls-proxy-4.ronnie6667770.workers.dev',
+    ];
+
+    // Counter for load balancing between workers
+    let requestCounter = 0;
+
+    function updateStatus(message, isLoading = false) {
+        const statusEl = document.getElementById('status');
+        if (isLoading) {
+            statusEl.innerHTML = `<span class="loader"></span> ${message}`;
+        } else {
+            statusEl.textContent = message;
+        }
+    }
+
+    function updateQualityButtons(activeQuality) {
+        document.querySelectorAll('.quality-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.quality === activeQuality) {
+                btn.classList.add('active');
+            }
+        });
+    }
+
+    // Function to get the next worker in a round-robin fashion
+    function getNextProxyWorker() {
+        const workerIndex = requestCounter % PROXY_WORKERS.length;
+        requestCounter++;
+        return PROXY_WORKERS[workerIndex];
+    }
+
+    async function fetchM3U8FromAPI(shareUrl, quality) {
+        try {
+            updateStatus('Retrieving video stream...', true);
+
+            // Extract quality number without prefix
+            const qualityNum = quality.replace('M3U8_AUTO_', '');
+
+            // Call the FastAPI endpoint
+            const response = await fetch(`${API_BASE_URL}/get_m3u8?url=${encodeURIComponent(shareUrl)}&quality=${qualityNum}`);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to retrieve M3U8 URL');
+            }
+
+            const data = await response.json();
+            return data.m3u8_url;
+        } catch (error) {
+            console.error('Error fetching M3U8:', error);
+            updateStatus(`Error: ${error.message}`);
+            return null;
+        }
+    }
+
+    async function fetchStreamFromStartParam(startUrl, quality = 'M3U8_AUTO_360') {
+        try {
+            updateStatus('Fetching authenticated stream...', true);
+
+            // If the URL doesn't look like a full URL, assume it's a short URL or ID
+            if (!startUrl.startsWith('http') && !startUrl.startsWith('https://')) {
+                // Convert to TeraBox URL format
+                startUrl = `https://www.1024tera.com/sharing/link?surl=${startUrl}`;
+            }
+
+            console.log("Using startUrl:", startUrl);
+
+            // Handle direct stream URL from start parameter
+            const encodedUrl = encodeURIComponent(startUrl);
+            const targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
+
+            console.log("Fetching from:", targetUrl);
+
+            const response = await fetch(targetUrl);
+
+            if (!response.ok) {
+                throw new Error(`Failed to get stream: ${response.status}`);
+            }
+
+            // Get the M3U8 content as text
+            const m3u8Content = await response.text();
+
+            if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
+                console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
+                throw new Error('Invalid M3U8 content received');
+            }
+
+            // Create a blob URL from the M3U8 content
+            const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
+            const blobUrl = URL.createObjectURL(blob);
+
+            // Store the blob URL for later cleanup
+            window.currentBlobUrl = blobUrl;
+
+            return blobUrl;
+        } catch (error) {
+            console.error('Error fetching authenticated stream:', error);
+            updateStatus(`Error: ${error.message}`);
+            return null;
+        }
+    }
+
+    async function changeQuality(quality) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const shareUrl = urlParams.get('share');
+        const startUrl = urlParams.get('start');
+
+        currentQuality = quality;
+        updateQualityButtons(quality);
+
+        // Cleanup any existing blob URLs
+        cleanupBlobUrls();
+
+        // If we have a share URL, use it with the selected quality
+        if (shareUrl) {
+            const newM3u8Url = await fetchM3U8FromAPI(shareUrl, quality);
+            if (newM3u8Url) {
+                loadVideo(newM3u8Url);
             } else {
-                statusEl.textContent = message;
+                updateStatus('Failed to get video stream from share URL');
+            }
+        }
+        // If we have a start URL, it only supports 360p
+        else if (startUrl) {
+            if (quality !== 'M3U8_AUTO_360') {
+                updateStatus('Start parameter only supports 360p quality');
+                currentQuality = 'M3U8_AUTO_360';
+                updateQualityButtons(currentQuality);
+            }
+
+            const blobUrl = await fetchStreamFromStartParam(startUrl);
+            if (blobUrl) {
+                loadVideo(blobUrl);
+            }
+        } else {
+            updateStatus('No valid URL parameter provided');
+        }
+    }
+
+    // Function to clean up any blob URLs we've created
+    function cleanupBlobUrls() {
+        if (window.currentBlobUrl) {
+            URL.revokeObjectURL(window.currentBlobUrl);
+            window.currentBlobUrl = null;
+        }
+    }
+
+    async function initPlayer() {
+        updateStatus('Initializing player...', true);
+
+        // Initialize Telegram WebApp if available
+        let telegramStartParam = null;
+        if (window.Telegram && window.Telegram.WebApp) {
+            const tgWebApp = window.Telegram.WebApp;
+            tgWebApp.ready();
+            tgWebApp.expand();
+
+            // Get the startapp parameter from Telegram WebApp
+            if (tgWebApp.initDataUnsafe && tgWebApp.initDataUnsafe.start_param) {
+                telegramStartParam = tgWebApp.initDataUnsafe.start_param;
+                console.log("Telegram start param:", telegramStartParam);
+
+                // If this is a shortened URL from Telegram, treat it as a start parameter
+                if (telegramStartParam && !telegramStartParam.startsWith('http')) {
+                    // Construct the full TeraBox URL from the short URL
+                    telegramStartParam = `https://teraboxapp.com/s/${telegramStartParam}`;
+                }
             }
         }
 
-        function updateQualityButtons(activeQuality) {
-            document.querySelectorAll('.quality-btn').forEach(btn => {
-                btn.classList.remove('active');
-                if (btn.dataset.quality === activeQuality) {
-                    btn.classList.add('active');
-                }
-            });
-        }
+        const urlParams = new URLSearchParams(window.location.search);
+        const shareUrl = urlParams.get('share');
+        const startUrl = urlParams.get('start') || telegramStartParam;
 
-        // Function to get the next worker in a round-robin fashion
-        function getNextProxyWorker() {
-            const workerIndex = requestCounter % PROXY_WORKERS.length;
-            requestCounter++;
-            return PROXY_WORKERS[workerIndex];
-        }
-
-        async function fetchStreamUrlByKey(key) {
-            try {
-                updateStatus('Retrieving video stream by key...', true);
-                const response = await fetch(`${APP_API_URL}/get_stream_url?key=${key}`);
-                if (!response.ok) {
-                    let errorDetail = "Unknown error";
-                    try {
-                        const errorData = await response.json();
-                        errorDetail = errorData.detail || "Server error";
-                    } catch (e) {
-                        errorDetail = await response.text() || "Failed to parse error response";
-                    }
-
-                    console.error(`API Error (${response.status}):`, errorDetail);
-                    throw new Error(`${errorDetail} (Status: ${response.status})`);
-                }
-
-                const data = await response.json();
-                if (!data.url) {
-                    throw new Error("Received empty stream URL from server");
-                }
-
-                return data.url;
-            } catch (error) {
-                console.error('Error fetching stream URL by key:', error);
-                updateStatus(`Error: ${error.message}`);
-                return null;
+        // Set initial quality from button state
+        document.querySelectorAll('.quality-btn').forEach(btn => {
+            if (btn.classList.contains('active')) {
+                currentQuality = btn.dataset.quality;
             }
-        }
+        });
 
-        async function fetchM3U8FromAPI(shareUrl, quality) {
-            try {
-                updateStatus('Retrieving video stream...', true);
-
-                // Extract quality number without prefix
-                const qualityNum = quality.replace('M3U8_AUTO_', '');
-
-                // Call the FastAPI endpoint
-                const response = await fetch(`${API_BASE_URL}/get_m3u8?url=${encodeURIComponent(shareUrl)}&quality=${qualityNum}`);
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Failed to retrieve M3U8 URL');
-                }
-
-                const data = await response.json();
-                return data.m3u8_url;
-            } catch (error) {
-                console.error('Error fetching M3U8:', error);
-                updateStatus(`Error: ${error.message}`);
-                return null;
-            }
-        }
-
-        async function changeQuality(quality) {
-            const urlParams = new URLSearchParams(window.location.search);
-            const shareUrl = urlParams.get('share');
-            let streamUrl = urlParams.get('start');
-            let streamKey = urlParams.get('key');
-
-            // Check for Telegram WebApp startapp parameter
-            if (window.Telegram && window.Telegram.WebApp) {
-                const startAppParam = window.Telegram.WebApp.initDataUnsafe?.start_param || window.Telegram.WebApp.initData?.start_param;
-                if (startAppParam && !streamKey) {
-                    streamKey = startAppParam;
-                }
-            }
-
-            currentQuality = quality;
-            updateQualityButtons(quality);
-
-            // Cleanup any existing blob URLs
-            cleanupBlobUrls();
-
-            if (streamKey) {
-                // Get stream URL from backend using key
-                let streamUrlFromKey = await fetchStreamUrlByKey(streamKey);
-                if (streamUrlFromKey) {
-                    // Replace quality in the URL
-                    streamUrlFromKey = streamUrlFromKey.replace(/type=M3U8_AUTO_[0-9]+/, `type=${quality}`);
-                    loadVideo(streamUrlFromKey);
-                }
-            } else if (shareUrl) {
-                // Use API to get M3U8 URL with new quality
-                const newM3u8Url = await fetchM3U8FromAPI(shareUrl, quality);
-                if (newM3u8Url) {
-                    loadVideo(newM3u8Url);
-                }
-            } else if (streamUrl) {
-                // Update direct stream URL with new quality and use your existing backend endpoint
-                const updatedStreamUrl = streamUrl.replace(/type=M3U8_AUTO_[0-9]+/, `type=${quality}`);
-                try {
-                    updateStatus('Fetching authenticated stream...', true);
-                    
-                    // Handle either direct stream URL or terabox sharing link
-                    let targetUrl;
-                    if (updatedStreamUrl.includes('1024tera.com/share/streaming') || 
-                        updatedStreamUrl.includes('terabox.com/share/streaming')) {
-                        // Direct streaming URL - use your stream_fast endpoint
-                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
-                    } else if (updatedStreamUrl.includes('sharing/link') || 
-                               updatedStreamUrl.includes('teraboxdl.site') ||
-                               updatedStreamUrl.includes('terasharelink.com')) {
-                        // It's a sharing link - use your get_m3u8 endpoint
-                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8?url=${encodedUrl}&quality=${quality.replace('M3U8_AUTO_', '')}`;
-                    } else {
-                        // Try with stream_fast as fallback
-                        const encodedUrl = encodeURIComponent(updatedStreamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
-                    }
-                    
-                    const response = await fetch(targetUrl);
-                    
-                    if (!response.ok) {
-                        throw new Error(`Failed to get stream: ${response.status}`);
-                    }
-                    
-                    // Get the M3U8 content as text
-                    const m3u8Content = await response.text();
-                    
-                    if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
-                        console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
-                        throw new Error('Invalid M3U8 content received');
-                    }
-                    
-
-                    // Create a blob URL from the M3U8 content
-                    const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
-                    const blobUrl = URL.createObjectURL(blob);
-                    
-                    // Store the blob URL for later cleanup
-                    window.currentBlobUrl = blobUrl;
-                    
-                    // Load the blob URL
-                    loadVideo(blobUrl);
-                } catch (error) {
-                    console.error('Error fetching authenticated stream:', error);
-                    updateStatus(`Error: ${error.message}`);
-                }
+        // Priority 1: Use share URL if available (supports multiple qualities)
+        if (shareUrl) {
+            const m3u8Url = await fetchM3U8FromAPI(shareUrl, currentQuality);
+            if (m3u8Url) {
+                loadVideo(m3u8Url);
+                return;
             } else {
-                updateStatus('No video URL provided');
+                updateStatus('Failed to get video stream from share URL');
             }
         }
 
-        // Function to clean up any blob URLs we've created
-        function cleanupBlobUrls() {
-            if (window.currentBlobUrl) {
-                URL.revokeObjectURL(window.currentBlobUrl);
-                window.currentBlobUrl = null;
+        // Priority 2: Use start URL or Telegram start parameter (faster but 360p only)
+        if (startUrl) {
+            // Force 360p for start parameter
+            currentQuality = 'M3U8_AUTO_360';
+            updateQualityButtons(currentQuality);
+
+            const blobUrl = await fetchStreamFromStartParam(startUrl);
+            if (blobUrl) {
+                loadVideo(blobUrl);
+                return;
             }
         }
 
-        async function initPlayer() {
-            updateStatus('Initializing player...', true);
+        // No usable URL provided
+        updateStatus('No valid URL parameter provided. Use ?share= or ?start= parameter or open from Telegram bot.');
+    }
 
-            // Initialize Telegram WebApp if available
-            let startParam = null;
-            if (window.Telegram && window.Telegram.WebApp) {
-                const tgWebApp = window.Telegram.WebApp;
-                tgWebApp.ready();
-                tgWebApp.expand();
-
-                // Get the startapp parameter from Telegram WebApp
-                if (tgWebApp.initDataUnsafe && tgWebApp.initDataUnsafe.start_param) {
-                    startParam = tgWebApp.initDataUnsafe.start_param;
-                }
-            }
-
-            const urlParams = new URLSearchParams(window.location.search);
-            const shareUrl = urlParams.get('share');
-            const streamUrl = urlParams.get('start');
-            let streamKey = urlParams.get('key');
-
-            // Use startParam from Telegram if available
-            if (startParam && !streamKey) {
-                streamKey = startParam;
-            }
-
-            // Set initial quality from button state
-            document.querySelectorAll('.quality-btn').forEach(btn => {
-                if (btn.classList.contains('active')) {
-                    currentQuality = btn.dataset.quality;
-                }
-            });
-
-            // Extract quality from URL if present
-            if (streamUrl && streamUrl.includes('type=M3U8_AUTO_')) {
-                const match = streamUrl.match(/type=(M3U8_AUTO_[0-9]+)/);
-                if (match) {
-                    currentQuality = match[1];
-                    updateQualityButtons(currentQuality);
-                }
-            }
-
-                startParam,
-                streamKey,
-                shareUrl,
-                streamUrl
-            });
-
-            // Cleanup any existing blob URLs
-            cleanupBlobUrls();
-
-            // First priority: Use streamKey (either from URL or Telegram startapp)
-            if (streamKey) {
-                updateStatus('Fetching stream URL using key...', true);
-                try {
-                    const streamUrlFromKey = await fetchStreamUrlByKey(streamKey);
-                    if (streamUrlFromKey) {
-                        loadVideo(streamUrlFromKey);
-                        return;
-                    } else {
-                        console.error("Received empty stream URL from key");
-                        updateStatus('Failed to get stream URL from key');
-                    }
-                } catch (error) {
-                    console.error("Error fetching stream URL by key:", error);
-                    updateStatus(`Error: ${error.message}`);
-                }
-            }
-
-            // Second priority: Use share URL
-            if (shareUrl) {
-                updateStatus('Fetching stream from share URL...', true);
-                try {
-                    const m3u8Url = await fetchM3U8FromAPI(shareUrl, currentQuality);
-                    if (m3u8Url) {
-                        loadVideo(m3u8Url);
-                        return;
-                    } else {
-                        updateStatus('Failed to get video stream from share URL');
-                    }
-                } catch (error) {
-                    console.error("Error fetching M3U8 from share URL:", error);
-                    updateStatus(`Error: ${error.message}`);
-                }
-            }
-
-            // Third priority: Use direct stream URL with backend authentication
-            if (streamUrl) {
-                updateStatus('Fetching authenticated stream...', true);
-                try {
-                    // Handle either direct stream URL or terabox sharing link
-                    let targetUrl;
-                    if (streamUrl.includes('1024tera.com/share/streaming') || 
-                        streamUrl.includes('terabox.com/share/streaming')) {
-                        // Direct streaming URL - use your stream_fast endpoint
-                        const encodedUrl = encodeURIComponent(streamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
-                    } else if (streamUrl.includes('sharing/link') || 
-                               streamUrl.includes('teraboxdl.site') ||
-                               streamUrl.includes('terasharelink.com')) {
-                        // It's a sharing link - use your get_m3u8 endpoint
-                        const encodedUrl = encodeURIComponent(streamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8?url=${encodedUrl}&quality=${currentQuality.replace('M3U8_AUTO_', '')}`;
-                    } else {
-                        // Try with stream_fast as fallback
-                        const encodedUrl = encodeURIComponent(streamUrl);
-                        targetUrl = `${API_BASE_URL}/get_m3u8_stream_fast/${encodedUrl}`;
-                    }
-                    
-                    const response = await fetch(targetUrl);
-                    
-                    if (!response.ok) {
-                        throw new Error(`Failed to get stream: ${response.status}`);
-                    }
-                    
-                    // Get the M3U8 content as text
-                    const m3u8Content = await response.text();
-                    
-                    if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
-                        console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
-                        throw new Error('Invalid M3U8 content received');
-                    }
-
-                    // Create a blob URL from the M3U8 content
-                    const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
-                    const blobUrl = URL.createObjectURL(blob);
-                    
-                    // Store the blob URL for later cleanup
-                    window.currentBlobUrl = blobUrl;
-                    
-                    // Load the blob URL
-                    loadVideo(blobUrl);
-                    return;
-                } catch (error) {
-                    console.error('Error fetching authenticated stream:', error);
-                    updateStatus(`Error: ${error.message}`);
-                }
-            }
-
-            // No usable URL provided
-            updateStatus('No video URL provided. Use ?share= or ?start= parameter or open from Telegram bot.');
+    // Clean up resources when page is unloaded
+    window.addEventListener('beforeunload', function() {
+        cleanupBlobUrls();
+        if (hls) {
+            hls.destroy();
+            hls = null;
         }
-        
-        // Clean up resources when page is unloaded
-        window.addEventListener('beforeunload', function() {
-            cleanupBlobUrls();
+    });
+
+    function loadVideo(streamUrl) {
+        const video = document.getElementById('videoPlayer');
+        const currentTime = video.currentTime;
+        const wasPlaying = !video.paused;
+
+        updateStatus('Loading video stream...', true);
+
+        if (Hls.isSupported()) {
             if (hls) {
                 hls.destroy();
-                hls = null;
             }
-        });
 
-        function loadVideo(streamUrl) {
-            const video = document.getElementById('videoPlayer');
-            const currentTime = video.currentTime;
-            const wasPlaying = !video.paused;
+            hls = new Hls({
+                xhrSetup: function(xhr, url) {
+                    // For TeraBox/freeterabox domains, proxy through our worker
+                    if (url.includes('freeterabox.com') ||
+                        url.includes('1024tera.com') ||
+                        url.includes('terabox.com')) {
 
-            updateStatus('Loading video stream...', true);
-
-            if (Hls.isSupported()) {
-                if (hls) {
-                    hls.destroy();
-                }
-
-                hls = new Hls({
-                    xhrSetup: function(xhr, url) {
-                        // For TeraBox/freeterabox domains, proxy through our worker
-                        if (url.includes('freeterabox.com') || 
-                            url.includes('1024tera.com') || 
-                            url.includes('terabox.com')) {
-                            
-                            // Use our dedicated CORS proxy worker
-                            const proxyUrl = 'https://terabox-hls-proxy.mohdamir7505.workers.dev/?url=';
-                            const newUrl = proxyUrl + encodeURIComponent(url);
-                            xhr.open('GET', newUrl, true);
-                        } 
-                        // For blob URLs or API URLs, access directly
-                        else if (url.startsWith('blob:') || 
-                                url.startsWith('https://api.ronnieverse.site') || 
-                                url.startsWith('https://ronnieverse.site')) {
-                            xhr.open('GET', url, true);
-                        }
-                        // For all other URLs, use round-robin proxying
-                        else {
-                            const proxyWorker = getNextProxyWorker();
-                            const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
-                            xhr.open('GET', newUrl, true);
-                        }
-                        xhr.withCredentials = false;
-                    },
-                    // Implement retry logic for segment loading failures
-                    fragLoadingMaxRetry: 5,
-                    fragLoadingRetryDelay: 1000,
-                    manifestLoadingMaxRetry: 5,
-                    manifestLoadingRetryDelay: 1000
-                });
-
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                    if (data.fatal) {
-                        console.error('Fatal HLS error:', data);
-                        updateStatus(`Loading error: ${data.type}. Try another quality.`);
+                        // Use our dedicated CORS proxy worker
+                        const proxyUrl = 'https://terabox-hls-proxy.mohdamir7505.workers.dev/?url=';
+                        const newUrl = proxyUrl + encodeURIComponent(url);
+                        xhr.open('GET', newUrl, true);
                     }
-                });
-
-                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.currentTime = currentTime;
-                    updateStatus('Ready to play');
-                    if (wasPlaying) {
-                        video.play().catch(() => {
-                            updateStatus('Click play to start');
-                        });
+                    // For blob URLs or API URLs, access directly
+                    else if (url.startsWith('blob:') ||
+                        url.startsWith('https://api.ronnieverse.site') ||
+                        url.startsWith('https://ronnieverse.site')) {
+                        xhr.open('GET', url, true);
                     }
-                });
-
-                try {
-                    hls.loadSource(streamUrl);
-                    hls.attachMedia(video);
-                } catch (error) {
-                    console.error('Error loading HLS source:', error);
-                    updateStatus('Error loading video');
-                }
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                video.src = streamUrl;
-                video.addEventListener('loadedmetadata', function() {
-                    video.currentTime = currentTime;
-                    updateStatus('Ready to play');
-                    if (wasPlaying) {
-                        video.play().catch(() => {
-                            updateStatus('Click play to start');
-                        });
+                    // For all other URLs, use round-robin proxying
+                    else {
+                        const proxyWorker = getNextProxyWorker();
+                        const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
+                        xhr.open('GET', newUrl, true);
                     }
-                });
-            } else {
-                updateStatus('HLS not supported in this browser');
-            }
-        }
-
-        // Add click handlers for quality buttons
-        document.querySelectorAll('.quality-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                changeQuality(btn.dataset.quality);
+                    xhr.withCredentials = false;
+                },
+                // Implement retry logic for segment loading failures
+                fragLoadingMaxRetry: 5,
+                fragLoadingRetryDelay: 1000,
+                manifestLoadingMaxRetry: 5,
+                manifestLoadingRetryDelay: 1000
             });
-        });
 
-        // Initialize the player when the page loads
-        window.addEventListener('load', initPlayer);
-    </script>
+            hls.on(Hls.Events.ERROR, function(event, data) {
+                if (data.fatal) {
+                    console.error('Fatal HLS error:', data);
+                    updateStatus(`Loading error: ${data.type}. Try another quality.`);
+                }
+            });
+
+            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                video.currentTime = currentTime;
+                updateStatus('Ready to play');
+                if (wasPlaying) {
+                    video.play().catch(() => {
+                        updateStatus('Click play to start');
+                    });
+                }
+            });
+
+            try {
+                hls.loadSource(streamUrl);
+                hls.attachMedia(video);
+            } catch (error) {
+                console.error('Error loading HLS source:', error);
+                updateStatus('Error loading video');
+            }
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = streamUrl;
+            video.addEventListener('loadedmetadata', function() {
+                video.currentTime = currentTime;
+                updateStatus('Ready to play');
+                if (wasPlaying) {
+                    video.play().catch(() => {
+                        updateStatus('Click play to start');
+                    });
+                }
+            });
+        } else {
+            updateStatus('HLS not supported in this browser');
+        }
+    }
+
+    // Add click handlers for quality buttons
+    document.querySelectorAll('.quality-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Check if we're using start parameter which only supports 360p
+            const urlParams = new URLSearchParams(window.location.search);
+            const startUrl = urlParams.get('start');
+            const shareUrl = urlParams.get('share');
+
+            if (startUrl && !shareUrl && btn.dataset.quality !== 'M3U8_AUTO_360') {
+                updateStatus('Start parameter only supports 360p quality');
+                updateQualityButtons('M3U8_AUTO_360');
+                return;
+            }
+
+            changeQuality(btn.dataset.quality);
+        });
+    });
+
+    // Initialize the player when the page loads
+    window.addEventListener('load', initPlayer);
+</script>
 </body>
 </html>

@@ -393,7 +393,7 @@ async def get_m3u8_fast_stream(current_url: str) -> str:
     extractor = TeraBoxExtractor()
     try:
         # Fetch data from the TeraBox URL
-        data = await extractor.get_data("https://www.1024tera.com/sharing/link?surl=CnnaVEnCr1WNCeZgESrGsg")
+        data = await extractor.get_data(current_url)
         if not data:
             log.error("Failed to fetch data from TeraBox URL")
             return None
