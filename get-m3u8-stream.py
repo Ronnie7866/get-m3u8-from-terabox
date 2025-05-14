@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 from get_m3u8_stream_fast import get_m3u8_fast_stream
 from logger_config import setup_logger
+import base64
+import asyncio
 
 log = setup_logger("get-m3u8-stream")
 
@@ -338,6 +340,108 @@ async def get_streaming_url(video_filename: str, resolution: str) -> Optional[st
         log.warning(f"Unexpected response format: {response.text[:100]}...")
         return None
 
+def get_bdstoken_from_cookies(session):
+    # Try to extract bdstoken from cookies if present
+    for cookie in session.cookies:
+        if cookie.name == 'bdstoken':
+            return cookie.value
+    return ''
+
+def extract_terabox_tokens(html_content: str):
+    import urllib.parse
+    # Extract bdstoken
+    bdstoken_match = re.search(r'"bdstoken"\s*:\s*"([^"]+)"', html_content)
+    bdstoken = bdstoken_match.group(1) if bdstoken_match else ''
+
+    # Extract jsToken (raw, then decode, then extract inside fn("..."))
+    jstoken_match = re.search(r'"jsToken"\s*:\s*"([^"]+)"', html_content)
+    js_token_raw = jstoken_match.group(1) if jstoken_match else ''
+    js_token = ''
+    if js_token_raw:
+        decoded = urllib.parse.unquote(js_token_raw)
+        fn_match = re.search(r'fn\(["\']([A-F0-9]+)["\']\)', decoded)
+        if fn_match:
+            js_token = fn_match.group(1)
+
+    # Optionally extract csrf
+    csrf_match = re.search(r'"csrf"\s*:\s*"([^"]+)"', html_content)
+    csrf = csrf_match.group(1) if csrf_match else ''
+
+    return {
+        "bdstoken": bdstoken,
+        "jsToken": js_token,
+        "csrf": csrf
+    }
+
+async def get_verification_token(session: requests.Session):
+    """
+    Fetch the main page and extract the verification token needed for delete operations.
+    Returns a dictionary with bdstoken, jsToken, and csrf if found.
+    """
+    try:
+        main_page_url = "https://www.1024terabox.com/main?category=all"
+        response = session.get(main_page_url)
+        response.raise_for_status()
+        html_content = response.text
+        tokens = extract_terabox_tokens(html_content)
+        log.info(f"Extracted tokens: {tokens}")
+        return tokens
+    except Exception as e:
+        log.error(f"Error extracting verification tokens: {e}")
+        return {"bdstoken": "", "jsToken": "", "csrf": ""}
+
+async def delete_terabox_file(video_filename: str, session: requests.Session, delay: int = 4):
+    """
+    Waits for a delay, then attempts to delete the file from TeraBox using the API.
+    Logs success or failure, does not raise errors.
+    """
+    await asyncio.sleep(delay)
+    try:
+        # First get the verification tokens from the main page
+        tokens = await get_verification_token(session)
+
+        # Prepare dynamic headers
+        headers = DEFAULT_HEADERS.copy()
+        # Use the session's cookies as a string
+        headers['cookie'] = '; '.join([f"{c.name}={c.value}" for c in session.cookies])
+        headers['content-type'] = 'application/x-www-form-urlencoded'
+        headers['x-requested-with'] = 'XMLHttpRequest'
+        headers['origin'] = 'https://www.1024terabox.com'
+        headers['referer'] = 'https://www.1024terabox.com/main?category=all'
+
+        # Prepare payload
+        filelist = f'["{video_filename}"]' if video_filename.startswith('/') else f'["/{video_filename}"]'
+        encoded_filelist = urllib.parse.quote(filelist)
+        payload = f'filelist={encoded_filelist}'
+
+        # Compose the API URL with all verification tokens
+        api_url = f"https://www.1024terabox.com/api/filemanager?async=2&onnest=fail&opera=delete&app_id=250528&web=1&channel=dubox&clienttype=0"
+
+        if tokens["bdstoken"]:
+            api_url += f"&bdstoken={tokens['bdstoken']}"
+        if tokens["jsToken"]:
+            api_url += f"&jsToken={tokens['jsToken']}"
+        if tokens["csrf"]:
+            api_url += f"&csrf={tokens['csrf']}"
+
+        # Send the request
+        resp = requests.post(api_url, headers=headers, data=payload)
+        if resp.status_code == 200 and resp.json().get('errno') == 0:
+            log.info(f"Successfully deleted file from TeraBox: {video_filename}")
+        else:
+            log.warning(f"Failed to delete file from TeraBox: {video_filename}, status={resp.status_code}, resp={resp.text}")
+
+            # If still failing, try with base64 encoding as in original code
+            if "need verify" in resp.text:
+                log.info("Retrying with base64 encoded payload")
+                payload_b64 = base64.b64encode(payload.encode()).decode()
+                resp = requests.post(api_url, headers=headers, data=base64.b64decode(payload_b64))
+                if resp.status_code == 200 and resp.json().get('errno') == 0:
+                    log.info(f"Successfully deleted file from TeraBox with base64 encoding: {video_filename}")
+                else:
+                    log.warning(f"Failed again to delete file from TeraBox: {video_filename}, status={resp.status_code}, resp={resp.text}")
+    except Exception as e:
+        log.error(f"Exception during TeraBox file deletion: {e}")
 
 @app.get("/get_m3u8", response_model=StreamingResponse,
          responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
@@ -361,6 +465,9 @@ async def get_m3u8(
         stream_url = await get_streaming_url(video_filename, quality)
         if not stream_url:
             raise HTTPException(status_code=404, detail="Could not retrieve streaming URL")
+
+        # Step 4: Schedule deletion after a delay (non-blocking)
+        asyncio.create_task(delete_terabox_file(video_filename, session, delay=4))
 
         return {"m3u8_url": stream_url, "filename": video_filename, "quality": quality}
 
@@ -394,33 +501,33 @@ def parse_netscape_cookie(cookie_data: str) -> Dict[str, str]:
         Dictionary mapping cookie names to values
     """
     cookie_dict = {}
-    
+
     try:
         # Split the input data into lines
         lines = cookie_data.strip().split('\n')
-        
+
         for line in lines:
             # Skip empty lines and comments
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-            
+
             # Handle the tab-separated format
             # Domain, flag, path, secure, expiration, name, value
             parts = re.split(r'\s+', line)
-            
+
             # Make sure we have enough parts for a valid cookie entry
             if len(parts) >= 7:
                 domain = parts[0]
                 name = parts[5]
                 value = parts[6]
-                
+
                 cookie_dict[name] = value
                 log.info(f"Parsed cookie: {name}={value[:10]}... for domain {domain}")
-        
+
         log.info(f"Successfully parsed {len(cookie_dict)} cookies")
         return cookie_dict
-    
+
     except Exception as e:
         log.error(f"Error parsing Netscape cookie format: {str(e)}")
         return {}
@@ -438,22 +545,22 @@ async def update_cookie(request: CookieUpdateRequest):
     """
     try:
         global COOKIES
-        
+
         # Parse the provided cookie data
         new_cookies = parse_netscape_cookie(request.cookie_data)
-        
+
         if not new_cookies:
             raise HTTPException(status_code=400, detail="Failed to parse cookie data")
-            
+
         # Update the global COOKIES dictionary
         COOKIES.update(new_cookies)
-        
+
         # Update the session cookies
         session.cookies.update(new_cookies)
-        
+
         log.info(f"Successfully updated cookies with {len(new_cookies)} new values")
         return {"success": True, "message": f"Successfully updated {len(new_cookies)} cookies"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
