@@ -440,7 +440,7 @@ async def update_cookie(request: CookieUpdateRequest):
         global COOKIES
         
         # Parse the provided cookie data
-        new_cookies = parse_netscape_cookie(request.cookie_data)
+        new_cookies = parse_netscape_cookie(cookie_request.cookie_data)
         
         if not new_cookies:
             raise HTTPException(status_code=400, detail="Failed to parse cookie data")
