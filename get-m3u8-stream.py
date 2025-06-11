@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from get_m3u8_stream_fast import get_m3u8_fast_stream
 from logger_config import setup_logger
+from cookie_config import cookie_manager
 
 log = setup_logger("get-m3u8-stream")
 
@@ -376,6 +377,26 @@ async def health_check():
     """Health check endpoint to verify API status"""
     return {"status": "healthy", "version": "1.0.0"}
 
+@app.get("/refresh_cookies")
+async def refresh_cookies():
+    """Force refresh cookies from GitHub repository"""
+    try:
+        new_cookie = cookie_manager.force_refresh()
+        if new_cookie:
+            global COOKIES, COOKIE_STRING
+            # Update the COOKIE_STRING with the new cookie
+            COOKIE_STRING = new_cookie
+            # Update global cookies and session cookies
+            COOKIES = {k.strip(): v.strip() for k, v in (cookie.split('=', 1) for cookie in COOKIE_STRING.split('; '))}
+            session.cookies.update(COOKIES)
+            return {"status": "success", "message": "Cookies refreshed successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="No valid cookies found from GitHub")
+    except Exception as e:
+        log.error(f"Error refreshing cookies: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing cookies: {str(e)}")
+
+
 def parse_netscape_cookie(cookie_data: str) -> Dict[str, str]:
     """
     Parse Netscape cookie format into a dictionary suitable for requests.Session.cookies
@@ -438,9 +459,8 @@ async def update_cookie(request: CookieUpdateRequest):
     """
     try:
         global COOKIES
-        
-        # Parse the provided cookie data
-        new_cookies = parse_netscape_cookie(cookie_request.cookie_data)
+          # Parse the provided cookie data
+        new_cookies = parse_netscape_cookie(request.cookie_data)
         
         if not new_cookies:
             raise HTTPException(status_code=400, detail="Failed to parse cookie data")

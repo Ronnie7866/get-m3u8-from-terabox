@@ -1,93 +1,523 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+    <head>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-VEB4N4N2KW"></script>
+    <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-VEB4N4N2KW');
+    </script>
+
+    <meta name="5cab2f0536c57a284577df01171de6fc978b5a4a" content="5cab2f0536c57a284577df01171de6fc978b5a4a" />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HLS Video Player</title>
+    <title>TeraBox Video Player</title>
+    <link rel="icon" href="logo-small.jpg" type="image/jpeg">
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+    <!-- Adsterra Popunder Ad -->
+    <script type='text/javascript' src='//violationtones.com/14/d3/ab/14d3abcba513035ff74ae2503cb01722.js'></script>
+
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap');
+
+        :root {
+            --primary-color: #667eea;
+            --primary-light: #764ba2;
+            --primary-dark: #4c63d2;
+            --secondary-color: #f093fb;
+            --accent-color: #4facfe;
+            --background-dark: #0f0f23;
+            --background-medium: #1a1a2e;
+            --background-light: #16213e;
+            --text-light: #ffffff;
+            --text-muted: #a0a0a0;
+            --success-color: #00d4aa;
+            --error-color: #ff6b6b;
+            --warning-color: #feca57;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
-            text-align: center;
-            font-family: Arial, sans-serif;
+            font-family: 'Montserrat', sans-serif;
+            background: linear-gradient(135deg, var(--background-dark) 0%, var(--background-medium) 50%, var(--background-light) 100%);
+            background-attachment: fixed;
+            color: var(--text-light);
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
-            background-color: #1a1a1a;
-            color: #ffffff;
+            padding: 30px 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
         }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
+                        radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.2) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        h2 {
+            margin-bottom: 30px;
+            font-weight: 600;
+            font-size: 32px;
+            color: var(--text-light);
+            position: relative;
+            padding-bottom: 15px;
+            text-shadow: 0 4px 8px rgba(0,0,0,0.4);
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.5px;
+        }
+
+        h2::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            bottom: 0;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary-color), var(--accent-color), var(--secondary-color));
+            border-radius: 2px;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            margin: 30px auto;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.4),
+                        0 0 0 1px var(--glass-border);
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+        }
+
         video {
             width: 100%;
-            max-width: 800px;
-            margin-top: 20px;
+            display: block;
             background: #000;
-            border-radius: 8px;
+            border-radius: 20px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        #status {
-            margin: 10px 0;
-            color: #888;
+
+        video:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.6);
         }
+
+        video:hover {
+            transform: scale(1.002);
+        }
+
+        /* Status display - now below the video */
+        .video-status-container {
+            width: 100%;
+            max-width: 900px;
+            margin: 15px auto;
+            text-align: center;
+        }
+
+        /* Status display styling */
+        .status-display {
+            background: var(--glass-bg);
+            padding: 15px 25px;
+            border-radius: 15px;
+            color: var(--text-light);
+            font-size: 16px;
+            font-weight: 500;
+            text-align: center;
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: inline-block;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+
         .quality-container {
             display: flex;
             justify-content: center;
-            gap: 10px;
-            margin: 15px auto;
-            max-width: 800px;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 25px auto;
+            max-width: 900px;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
         .quality-btn {
-            padding: 10px 20px;
-            background: #2c2c2c;
-            color: #fff;
-            border: 2px solid #3a3a3a;
-            border-radius: 6px;
+            padding: 12px 24px;
+            background: var(--glass-bg);
+            color: var(--text-light);
+            border: 1px solid var(--glass-border);
+            border-radius: 25px;
             cursor: pointer;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            min-width: 90px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'Montserrat', sans-serif;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            min-width: 100px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            position: relative;
+            overflow: hidden;
         }
+
+        .quality-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transition: left 0.5s;
+        }
+
+        .quality-btn:hover::before {
+            left: 100%;
+        }
+
         .quality-btn:hover {
-            background: #3a3a3a;
-            border-color: #4a4a4a;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-3px);
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.2);
+            border-color: var(--primary-color);
         }
+
         .quality-btn.active {
-            background: #4CAF50;
-            border-color: #45a049;
+            background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+            color: white;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+            border-color: transparent;
         }
+
+        .quality-btn.active:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 35px rgba(102, 126, 234, 0.5);
+        }
+
         .promo-banner {
-            margin: 20px auto;
-            padding: 15px;
-            background: #333;
-            border-radius: 8px;
-            max-width: 800px;
+            margin: 25px auto;
+            padding: 25px 30px;
+            background: var(--glass-bg);
+            border-radius: 20px;
+            max-width: 900px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(20px);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
         }
+
+        .promo-banner::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary-color), var(--accent-color), var(--secondary-color));
+        }
+
+        .promo-banner:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
         .promo-banner a {
-            color: #4CAF50;
+            color: var(--accent-color);
             text-decoration: none;
-            font-weight: bold;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            background: linear-gradient(135deg, var(--accent-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
+
         .promo-banner a:hover {
-            text-decoration: underline;
+            background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
+
+        .promo-banner a::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            bottom: -3px;
+            left: 0;
+            background: linear-gradient(90deg, var(--accent-color), var(--secondary-color));
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .promo-banner a:hover::after {
+            transform: scaleX(1);
+        }
+
         .loader {
-            border: 3px solid #333;
-            border-radius: 50%;
-            border-top: 3px solid #4CAF50;
+            display: inline-block;
             width: 24px;
             height: 24px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            vertical-align: middle;
-            margin-right: 8px;
+            margin-right: 12px;
+            position: relative;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+
+        .loader:before, .loader:after {
+            content: '';
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+            opacity: 0.8;
+            position: absolute;
+            top: 0;
+            left: 0;
+            animation: elegantPulse 2s infinite ease-in-out;
+        }
+
+        .loader:after {
+            animation-delay: -1s;
+            background: linear-gradient(135deg, var(--accent-color), var(--secondary-color));
+        }
+
+        @keyframes elegantPulse {
+            0%, 100% {
+                transform: scale(0);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1);
+                opacity: 0;
+            }
+        }
+
+        /* Hide quality buttons when using start param */
+        .using-start-param .quality-container {
+            display: none;
+        }
+
+        /* Loading animation */
+        .loading-animation {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100px;
+            height: 100px;
+            z-index: 10;
+            display: none;
+        }
+
+        .loading-animation.show {
+            display: block;
+        }
+
+        .loading-animation .circle {
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+            animation: elegantLoading 2s ease-in-out infinite;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .loading-animation .circle:nth-child(1) {
+            background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+            animation-delay: 0s;
+            box-shadow: 0 4px 15px rgba(240, 147, 251, 0.3);
+        }
+
+        .loading-animation .circle:nth-child(2) {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            animation-delay: -0.7s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .loading-animation .circle:nth-child(3) {
+            background: linear-gradient(135deg, var(--accent-color), var(--primary-color));
+            animation-delay: -1.4s;
+            box-shadow: 0 4px 15px rgba(79, 172, 254, 0.3);
+        }
+
+        @keyframes elegantLoading {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+                opacity: 1;
+            }
+            25% {
+                transform: translate(35px, 0) scale(1.1);
+                opacity: 0.8;
+            }
+            50% {
+                transform: translate(35px, 35px) scale(1);
+                opacity: 0.6;
+            }
+            75% {
+                transform: translate(0, 35px) scale(1.1);
+                opacity: 0.8;
+            }
+        }
+
+        /* Ad Container Styles */
+        .ad-container {
+            width: 100%;
+            max-width: 900px;
+            margin: 20px auto;
+            text-align: center;
+            position: relative;
+        }
+
+        .ad-container.top-banner {
+            margin-bottom: 15px;
+        }
+
+        .ad-container.bottom-banner {
+            margin-top: 15px;
+        }
+
+        .ad-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+            opacity: 0.7;
+            font-weight: 400;
+            letter-spacing: 0.5px;
+        }
+
+        .banner-ad-desktop {
+            display: block;
+        }
+
+        .banner-ad-mobile {
+            display: none;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            body {
+                padding: 20px 15px;
+            }
+
+            .quality-btn {
+                padding: 10px 18px;
+                font-size: 13px;
+                min-width: 80px;
+            }
+
+            h2 {
+                font-size: 26px;
+            }
+
+            .video-container {
+                margin: 20px auto;
+                border-radius: 15px;
+            }
+
+            .promo-banner {
+                padding: 20px;
+                margin: 20px auto;
+            }
+
+            .banner-ad-desktop {
+                display: none;
+            }
+
+            .banner-ad-mobile {
+                display: block;
+            }
+
+            .ad-container {
+                margin: 15px auto;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .quality-btn {
+                padding: 8px 16px;
+                font-size: 12px;
+                min-width: 70px;
+            }
+
+            h2 {
+                font-size: 22px;
+            }
+
+            .quality-container {
+                gap: 10px;
+            }
         }
     </style>
 </head>
 <body>
 <h2>TeraBox Video Player</h2>
+
 <div class="promo-banner">
-    Download more content at <a href="https://teraboxdl.site" target="_blank">teraboxdl.site</a>
+    Download more content at <a href="https://TeraBoxDL.site" target="_blank">teraboxdl.site</a>
+</div>
+
+<!-- Top Banner Ad (Desktop: 728x90, Mobile: 468x60) -->
+<div class="ad-container top-banner">
+    <div class="ad-label">Advertisement</div>
+    <!-- Desktop Banner 728x90 -->
+    <div class="banner-ad-desktop">
+        <script type="text/javascript">
+            atOptions = {
+                'key' : '07eb3ee6bfec794a5c0eaf7050cfd34d',
+                'format' : 'iframe',
+                'height' : 90,
+                'width' : 728,
+                'params' : {}
+            };
+        </script>
+        <script type="text/javascript" src="//violationtones.com/07eb3ee6bfec794a5c0eaf7050cfd34d/invoke.js"></script>
+    </div>
+    <!-- Mobile Banner 468x60 -->
+    <div class="banner-ad-mobile">
+        <script type="text/javascript">
+            atOptions = {
+                'key' : '874076d740a9eea183bf1656b433afc8',
+                'format' : 'iframe',
+                'height' : 60,
+                'width' : 468,
+                'params' : {}
+            };
+        </script>
+        <script type="text/javascript" src="//violationtones.com/874076d740a9eea183bf1656b433afc8/invoke.js"></script>
+    </div>
 </div>
 <div class="quality-container">
     <button class="quality-btn active" data-quality="M3U8_AUTO_360">360p</button>
@@ -95,14 +525,61 @@
     <button class="quality-btn" data-quality="M3U8_AUTO_720">720p</button>
     <button class="quality-btn" data-quality="M3U8_AUTO_1080">1080p</button>
 </div>
-<div id="status"></div>
-<video id="videoPlayer" controls></video>
+<div class="video-container">
+    <video id="videoPlayer" controls></video>
+    <div class="loading-animation">
+        <div class="circle"></div>
+        <div class="circle"></div>
+        <div class="circle"></div>
+    </div>
+</div>
+
+<!-- New dedicated status container below the video -->
+<div class="video-status-container">
+    <div id="status" class="status-display"></div>
+</div>
+
+<!-- Bottom Banner Ad (Desktop: 728x90, Mobile: 468x60) -->
+<div class="ad-container bottom-banner">
+    <div class="ad-label">Advertisement</div>
+    <!-- Desktop Banner 728x90 -->
+    <div class="banner-ad-desktop">
+        <script type="text/javascript">
+            atOptions = {
+                'key' : '07eb3ee6bfec794a5c0eaf7050cfd34d',
+                'format' : 'iframe',
+                'height' : 90,
+                'width' : 728,
+                'params' : {}
+            };
+        </script>
+        <script type="text/javascript" src="//violationtones.com/07eb3ee6bfec794a5c0eaf7050cfd34d/invoke.js"></script>
+    </div>
+    <!-- Mobile Banner 468x60 -->
+    <div class="banner-ad-mobile">
+        <script type="text/javascript">
+            atOptions = {
+                'key' : '874076d740a9eea183bf1656b433afc8',
+                'format' : 'iframe',
+                'height' : 60,
+                'width' : 468,
+                'params' : {}
+            };
+        </script>
+        <script type="text/javascript" src="//violationtones.com/874076d740a9eea183bf1656b433afc8/invoke.js"></script>
+    </div>
+</div>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
     let hls = null;
     let currentQuality = 'M3U8_AUTO_360';
     const API_BASE_URL = 'https://api.ronnieverse.site';
+
+    // Adsterra Direct Link Configuration
+    const DIRECT_LINK_URL = 'https://violationtones.com/afqprpjz73?key=8b883cba90ff4f1688cf33fa1b9bff73';
+    let directLinkUsed = false;
+    let popunderTriggered = false;
 
     // Configure proxy workers
     const PROXY_WORKERS = [
@@ -112,15 +589,38 @@
         'https://terabox-hls-proxy-4.ronnie6667770.workers.dev',
     ];
 
-    // Counter for load balancing between workers
-    let requestCounter = 0;
+    // Counter for load balancing between workers - randomized initial value for better distribution
+    let requestCounter = Math.floor(Math.random() * PROXY_WORKERS.length);
+
+    // Direct Link Function - Opens in new tab for maximum revenue
+    function triggerDirectLink() {
+        if (!directLinkUsed) {
+            // Open direct link in new tab
+            const directLinkWindow = window.open(DIRECT_LINK_URL, '_blank');
+            if (directLinkWindow) {
+                directLinkUsed = true;
+                console.log('Direct link triggered');
+            }
+        }
+    }
+
+    // Popunder trigger function - only once per session
+    function triggerPopunder() {
+        if (!popunderTriggered) {
+            popunderTriggered = true;
+            console.log('Popunder triggered');
+            // Popunder is already loaded via script in head
+        }
+    }
 
     function updateStatus(message, isLoading = false) {
         const statusEl = document.getElementById('status');
         if (isLoading) {
             statusEl.innerHTML = `<span class="loader"></span> ${message}`;
+            document.querySelector('.loading-animation').classList.add('show');
         } else {
             statusEl.textContent = message;
+            document.querySelector('.loading-animation').classList.remove('show');
         }
     }
 
@@ -274,7 +774,7 @@
                 // If this is a shortened URL from Telegram, treat it as a start parameter
                 if (telegramStartParam && !telegramStartParam.startsWith('http')) {
                     // Construct the full TeraBox URL from the short URL
-                    telegramStartParam = `https://teraboxapp.com/s/${telegramStartParam}`;
+                    telegramStartParam = `https://www.1024tera.com/sharing/link?surl=${telegramStartParam}`;
                 }
             }
         }
@@ -289,6 +789,11 @@
                 currentQuality = btn.dataset.quality;
             }
         });
+
+        // If using start parameter, hide the quality buttons outside player
+        if (startUrl && !shareUrl) {
+            document.body.classList.add('using-start-param');
+        }
 
         // Priority 1: Use share URL if available (supports multiple qualities)
         if (shareUrl) {
@@ -315,7 +820,7 @@
         }
 
         // No usable URL provided
-        updateStatus('No valid URL parameter provided. Use ?share= or ?start= parameter or open from Telegram bot.');
+        updateStatus('An Error occurred');
     }
 
     // Clean up resources when page is unloaded
@@ -334,6 +839,19 @@
 
         updateStatus('Loading video stream...', true);
 
+        // Add event listeners for Direct Link triggers
+        video.addEventListener('play', function() {
+            triggerDirectLink();
+            triggerPopunder();
+        }, { once: true });
+
+        video.addEventListener('loadeddata', function() {
+            // Add click event to video for direct link
+            video.addEventListener('click', function() {
+                triggerDirectLink();
+            });
+        }, { once: true });
+
         if (Hls.isSupported()) {
             if (hls) {
                 hls.destroy();
@@ -341,14 +859,14 @@
 
             hls = new Hls({
                 xhrSetup: function(xhr, url) {
-                    // For TeraBox/freeterabox domains, proxy through our worker
+                    // For TeraBox/freeterabox domains, USE ROUND-ROBIN WORKER
                     if (url.includes('freeterabox.com') ||
                         url.includes('1024tera.com') ||
                         url.includes('terabox.com')) {
 
-                        // Use our dedicated CORS proxy worker
-                        const proxyUrl = 'https://terabox-hls-proxy.mohdamir7505.workers.dev/?url=';
-                        const newUrl = proxyUrl + encodeURIComponent(url);
+                        // FIX: Use round-robin proxy worker instead of hardcoded one
+                        const proxyWorker = getNextProxyWorker();
+                        const newUrl = `${proxyWorker}/?url=${encodeURIComponent(url)}`;
                         xhr.open('GET', newUrl, true);
                     }
                     // For blob URLs or API URLs, access directly
@@ -415,6 +933,9 @@
     // Add click handlers for quality buttons
     document.querySelectorAll('.quality-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            // Trigger Direct Link on quality change
+            triggerDirectLink();
+
             // Check if we're using start parameter which only supports 360p
             const urlParams = new URLSearchParams(window.location.search);
             const startUrl = urlParams.get('start');
@@ -430,8 +951,15 @@
         });
     });
 
+    // Add general click event for popunder (first interaction)
+    document.addEventListener('click', function() {
+        triggerPopunder();
+    }, { once: true });
+
     // Initialize the player when the page loads
     window.addEventListener('load', initPlayer);
 </script>
+
+
 </body>
 </html>
