@@ -26,10 +26,23 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=[
+        "https://player.teraboxdl.site",  # Your player domain
+        "http://player.teraboxdl.site",   # In case HTTP is used
+        "https://www.teraboxdl.site",     # Main site
+        "http://www.teraboxdl.site",
+        "https://teraboxdl.site",
+        "http://teraboxdl.site",
+        "http://localhost",               # For local development
+        "http://localhost:3000",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "OPTIONS"],  # Specify the HTTP methods you need
+    allow_headers=["*"],                       # Allow all headers
+    expose_headers=["*"],                      # Expose all headers
+    max_age=3600,                             # Cache preflight requests for 1 hour
 )
 
 m3u8_storage = {}
@@ -379,17 +392,11 @@ async def health_check():
 
 @app.get("/refresh_cookies")
 async def refresh_cookies():
-    """Force refresh cookies from GitHub repository"""
+    """Force refresh cookies from GitHub repository for get_m3u8_stream_fast only"""
     try:
         new_cookie = cookie_manager.force_refresh()
         if new_cookie:
-            global COOKIES, COOKIE_STRING
-            # Update the COOKIE_STRING with the new cookie
-            COOKIE_STRING = new_cookie
-            # Update global cookies and session cookies
-            COOKIES = {k.strip(): v.strip() for k, v in (cookie.split('=', 1) for cookie in COOKIE_STRING.split('; '))}
-            session.cookies.update(COOKIES)
-            return {"status": "success", "message": "Cookies refreshed successfully"}
+            return {"status": "success", "message": "Cookies for get_m3u8_stream_fast refreshed successfully"}
         else:
             raise HTTPException(status_code=500, detail="No valid cookies found from GitHub")
     except Exception as e:
@@ -485,13 +492,22 @@ async def update_cookie(request: CookieUpdateRequest):
 async def get_m3u8_stream_fast(current_url: str):
     try:
         decoded_url = urllib.parse.unquote(current_url)
+        log.info(f"Processing URL: {decoded_url}")
 
-        # Get the actual streaming URL from the share URL, not the share URL itself
+        # Get the actual streaming URL from the share URL
         stream_url = await get_m3u8_fast_stream(current_url)
         if not stream_url:
+            log.error("Failed to generate streaming URL")
             raise HTTPException(status_code=404, detail="Failed to generate streaming URL")
 
-        # Use the streaming URL, not the original share URL
+        log.info(f"Generated stream URL: {stream_url[:100]}...")  # Log truncated URL for security
+
+        # Use fresh cookies from cookie manager
+        current_cookie = cookie_manager.get_cookie()
+        if not current_cookie:
+            log.error("No valid cookies available")
+            raise HTTPException(status_code=401, detail="No valid cookies available")
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.terabox.app/',
@@ -500,21 +516,63 @@ async def get_m3u8_stream_fast(current_url: str):
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'cookie': COOKIE_STRING
+            'Cookie': current_cookie  # Use cookie from cookie manager
         }
 
-        # Get the M3U8 content from the stream URL (not the original URL)
+        # Get the M3U8 content
         response = requests.get(stream_url, headers=headers)
+        log.info(f"Stream response status: {response.status_code}")
+
+        # Check for verification required error
+        if "errno" in response.text and "need verify" in response.text.lower():
+            log.error(f"Verification required. Response: {response.text}")
+            # Try to refresh cookies and retry once
+            log.info("Attempting to refresh cookies and retry...")
+            current_cookie = cookie_manager.force_refresh()
+            if current_cookie:
+                headers['Cookie'] = current_cookie
+                response = requests.get(stream_url, headers=headers)
+                log.info(f"Retry response status: {response.status_code}")
 
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code)
+            log.error(f"Stream request failed. Status: {response.status_code}, Response: {response.text[:200]}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to fetch stream. Response: {response.text[:200]}"
+            )
 
-        # Return the content directly
+        # Verify the content is actually M3U8
+        content = response.text
+        if not content.strip().startswith('#EXTM3U'):
+            if "errno" in content:
+                # Parse the error response
+                try:
+                    error_data = response.json()
+                    log.error(f"TeraBox API error: {error_data}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"TeraBox API error: {error_data.get('errmsg', 'Unknown error')}"
+                    )
+                except ValueError:
+                    pass
+            log.error(f"Invalid M3U8 content received: {content[:200]}")
+            raise HTTPException(status_code=400, detail="Invalid M3U8 content received")
+
+        # Return the content with appropriate headers
         return Response(
-            content=response.text,
-            media_type="application/vnd.apple.mpegurl"
+            content=content,
+            media_type="application/vnd.apple.mpegurl",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
+        log.error(f"Unexpected error in get_m3u8_stream_fast: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
