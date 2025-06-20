@@ -519,10 +519,9 @@
         <script type="text/javascript" src="//violationtones.com/874076d740a9eea183bf1656b433afc8/invoke.js"></script>
     </div>
 </div>
-<div class="quality-container">
-    <button class="quality-btn active" data-quality="M3U8_AUTO_360">360p</button>
+<div class="quality-container">    <button class="quality-btn" data-quality="M3U8_AUTO_360">360p</button>
     <button class="quality-btn" data-quality="M3U8_AUTO_480">480p</button>
-    <button class="quality-btn" data-quality="M3U8_AUTO_720">720p</button>
+    <button class="quality-btn active" data-quality="M3U8_AUTO_720">720p</button>
     <button class="quality-btn" data-quality="M3U8_AUTO_1080">1080p</button>
 </div>
 <div class="video-container">
@@ -573,7 +572,7 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
     let hls = null;
-    let currentQuality = 'M3U8_AUTO_360';
+    let currentQuality = 'M3U8_AUTO_720';
     const API_BASE_URL = 'https://api.ronnieverse.site';
 
     // Adsterra Direct Link Configuration
@@ -651,12 +650,39 @@
             const response = await fetch(`${API_BASE_URL}/get_m3u8?url=${encodeURIComponent(shareUrl)}&quality=${qualityNum}`);
 
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to retrieve M3U8 URL');
+                // Try to parse as JSON for error details
+                try {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to retrieve M3U8 content');
+                } catch (jsonError) {
+                    throw new Error(`Failed to retrieve M3U8 content: ${response.status}`);
+                }
             }
 
-            const data = await response.json();
-            return data.m3u8_url;
+            // Check if response is M3U8 content directly
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/vnd.apple.mpegurl')) {
+                // Get the M3U8 content as text
+                const m3u8Content = await response.text();
+
+                if (!m3u8Content || !m3u8Content.includes('#EXTM3U')) {
+                    console.error('Invalid M3U8 content received:', m3u8Content.substring(0, 100));
+                    throw new Error('Invalid M3U8 content received');
+                }
+
+                // Create a blob URL from the M3U8 content (similar to fetchStreamFromStartParam)
+                const blob = new Blob([m3u8Content], { type: 'application/vnd.apple.mpegurl' });
+                const blobUrl = URL.createObjectURL(blob);
+
+                // Store the blob URL for later cleanup
+                window.currentBlobUrl = blobUrl;
+
+                return blobUrl;
+            } else {
+                // Fallback: try to parse as JSON (for backward compatibility)
+                const data = await response.json();
+                return data.m3u8_url;
+            }
         } catch (error) {
             console.error('Error fetching M3U8:', error);
             updateStatus(`Error: ${error.message}`);

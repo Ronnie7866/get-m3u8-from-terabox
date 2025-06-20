@@ -1,14 +1,12 @@
 import re
 import time
 import urllib.parse
-import uuid
 from typing import Optional, Dict
 
 import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from get_m3u8_stream_fast import get_m3u8_fast_stream
@@ -26,38 +24,59 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=[
+        "https://player.teraboxdl.site",  # Your player domain
+        "http://player.teraboxdl.site",   # In case HTTP is used
+        "https://www.teraboxdl.site",     # Main site
+        "http://www.teraboxdl.site",
+        "https://teraboxdl.site",
+        "http://teraboxdl.site",
+        "http://localhost",               # For local development
+        "http://localhost:3000",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "OPTIONS"],  # Specify the HTTP methods you need
+    allow_headers=["*"],                       # Allow all headers
+    expose_headers=["*"],                      # Expose all headers
+    max_age=3600,                             # Cache preflight requests for 1 hour
 )
 
-m3u8_storage = {}
+# Video cache to track saved videos and avoid re-saving
+video_cache = {}
 
-# Clean up old entries (older than 1 hour)
-def cleanup_storage():
+# Clean up old video cache entries (older than 6 hours)
+def cleanup_video_cache():
     current_time = time.time()
-    to_remove = [token for token, (content, timestamp) in m3u8_storage.items()
-                 if current_time - timestamp > 3600]
-    for token in to_remove:
-        del m3u8_storage[token]
+    to_remove = [url_hash for url_hash, (_, timestamp) in video_cache.items()
+                 if current_time - timestamp > 21600]  # 6 hours
+    for url_hash in to_remove:
+        del video_cache[url_hash]
+        log.info(f"Cleaned up cached video entry: {url_hash}")
 
+def get_url_hash(url: str) -> str:
+    """Generate a hash for the URL to use as cache key"""
+    import hashlib
+    return hashlib.md5(url.encode()).hexdigest()
 
-@app.get("/m3u8/{token}")
-async def serve_m3u8(token: str):
-    cleanup_storage()
-    if token in m3u8_storage:
-        content, _ = m3u8_storage[token]
-        return PlainTextResponse(content, media_type="application/x-mpegURL")
-    else:
-        raise HTTPException(status_code=404, detail="M3U8 content not found")
+def is_video_cached(url: str) -> tuple[bool, Optional[str]]:
+    """Check if video is already saved and return filename if cached"""
+    cleanup_video_cache()
+    url_hash = get_url_hash(url)
+    if url_hash in video_cache:
+        filename, _ = video_cache[url_hash]
+        log.info(f"Video found in cache: {filename}")
+        return True, filename
+    return False, None
+
+def cache_video(url: str, filename: str):
+    """Cache the video filename for this URL"""
+    url_hash = get_url_hash(url)
+    video_cache[url_hash] = (filename, time.time())
+    log.info(f"Cached video: {filename} for URL hash: {url_hash}")
 
 # Response models
-class StreamingResponse(BaseModel):
-    m3u8_url: str
-    filename: str
-    quality: str
-
 class ErrorResponse(BaseModel):
     error: str
 
@@ -303,7 +322,11 @@ async def get_filename_from_terabox_url(url: str) -> Optional[str]:
         log.error(f"Error parsing the page: {e}")
         return None
 
-async def get_streaming_url(video_filename: str, resolution: str) -> Optional[str]:
+async def get_streaming_content(video_filename: str, resolution: str) -> Optional[str]:
+    """
+    Get M3U8 streaming content directly from TeraBox API
+    Returns either a direct M3U8 URL or the M3U8 content as a string
+    """
     url = "https://www.1024terabox.com/api/streaming"
     if not video_filename.startswith('/'):
         video_filename = '/' + video_filename
@@ -330,40 +353,61 @@ async def get_streaming_url(video_filename: str, resolution: str) -> Optional[st
             log.warning(f"No 'm3u8' in JSON: {data}")
             return None
     elif response.text.startswith("#EXTM3U"):
-        token = str(uuid.uuid4())
-        m3u8_storage[token] = (response.text, time.time())
-        m3u8_url = f"https://api.ronnieverse.site/m3u8/{token}"  # Update domain if different
-        log.info(f"Stored M3U8 content with token: {token}")
-        return m3u8_url
+        log.info("Retrieved M3U8 content directly")
+        return response.text  # Return M3U8 content directly instead of storing with token
     else:
         log.warning(f"Unexpected response format: {response.text[:100]}...")
         return None
 
 
-@app.get("/get_m3u8", response_model=StreamingResponse,
-         responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+@app.get("/get_m3u8")
 async def get_m3u8(
         url: str = Query(..., description="TeraBox sharing URL"),
         quality: str = Query("720", description="Desired quality (360, 480, 720, 1080)"),
         target_path: str = Query("/", description="Target path in TeraBox storage to save the file")
 ):
     try:
-        # Step 1: First save the video to TeraBox
-        save_success = save_terabox_video(session, url, target_path)
-        if not save_success:
-            raise HTTPException(status_code=500, detail="Failed to save video to TeraBox")
+        # Step 1: Check if video is already cached (smart caching)
+        is_cached, cached_filename = is_video_cached(url)
 
-        # Step 2: Extract the filename from the TeraBox URL
-        video_filename = await get_filename_from_terabox_url(url)
-        if not video_filename:
-            raise HTTPException(status_code=404, detail="Could not extract filename from TeraBox URL")
+        if is_cached:
+            log.info(f"Using cached video: {cached_filename}")
+            video_filename = cached_filename
+        else:
+            # Step 1a: Save the video to TeraBox (only if not cached)
+            log.info("Video not in cache, saving to TeraBox...")
+            save_success = save_terabox_video(session, url, target_path)
+            if not save_success:
+                raise HTTPException(status_code=500, detail="Failed to save video to TeraBox")
 
-        # Step 3: Get the streaming URL
-        stream_url = await get_streaming_url(video_filename, quality)
-        if not stream_url:
-            raise HTTPException(status_code=404, detail="Could not retrieve streaming URL")
+            # Step 1b: Extract the filename from the TeraBox URL
+            video_filename = await get_filename_from_terabox_url(url)
+            if not video_filename:
+                raise HTTPException(status_code=404, detail="Could not extract filename from TeraBox URL")
 
-        return {"m3u8_url": stream_url, "filename": video_filename, "quality": quality}
+            # Cache the video for future requests
+            cache_video(url, video_filename)
+
+        # Step 2: Get the M3U8 streaming content directly
+        stream_content = await get_streaming_content(video_filename, quality)
+        if not stream_content:
+            raise HTTPException(status_code=404, detail="Could not retrieve streaming content")
+
+        # Step 3: Return M3U8 content directly with proper headers
+        if stream_content.startswith("#EXTM3U"):
+            # Return M3U8 content directly
+            return Response(
+                content=stream_content,
+                media_type="application/vnd.apple.mpegurl",
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+        else:
+            # It's a URL, return JSON response for compatibility
+            return {"m3u8_url": stream_content, "filename": video_filename, "quality": quality}
 
     except HTTPException:
         raise
@@ -379,17 +423,11 @@ async def health_check():
 
 @app.get("/refresh_cookies")
 async def refresh_cookies():
-    """Force refresh cookies from GitHub repository"""
+    """Force refresh cookies from GitHub repository for get_m3u8_stream_fast only"""
     try:
         new_cookie = cookie_manager.force_refresh()
         if new_cookie:
-            global COOKIES, COOKIE_STRING
-            # Update the COOKIE_STRING with the new cookie
-            COOKIE_STRING = new_cookie
-            # Update global cookies and session cookies
-            COOKIES = {k.strip(): v.strip() for k, v in (cookie.split('=', 1) for cookie in COOKIE_STRING.split('; '))}
-            session.cookies.update(COOKIES)
-            return {"status": "success", "message": "Cookies refreshed successfully"}
+            return {"status": "success", "message": "Cookies for get_m3u8_stream_fast refreshed successfully"}
         else:
             raise HTTPException(status_code=500, detail="No valid cookies found from GitHub")
     except Exception as e:
@@ -485,13 +523,22 @@ async def update_cookie(request: CookieUpdateRequest):
 async def get_m3u8_stream_fast(current_url: str):
     try:
         decoded_url = urllib.parse.unquote(current_url)
+        log.info(f"Processing URL: {decoded_url}")
 
-        # Get the actual streaming URL from the share URL, not the share URL itself
+        # Get the actual streaming URL from the share URL
         stream_url = await get_m3u8_fast_stream(current_url)
         if not stream_url:
+            log.error("Failed to generate streaming URL")
             raise HTTPException(status_code=404, detail="Failed to generate streaming URL")
 
-        # Use the streaming URL, not the original share URL
+        log.info(f"Generated stream URL: {stream_url[:100]}...")  # Log truncated URL for security
+
+        # Use fresh cookies from cookie manager
+        current_cookie = cookie_manager.get_cookie()
+        if not current_cookie:
+            log.error("No valid cookies available")
+            raise HTTPException(status_code=401, detail="No valid cookies available")
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.terabox.app/',
@@ -500,21 +547,51 @@ async def get_m3u8_stream_fast(current_url: str):
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'cookie': COOKIE_STRING
+            'Cookie': current_cookie  # Use cookie from cookie manager
         }
 
         # Get the M3U8 content from the stream URL (not the original URL)
         response = robust_get(stream_url, headers=headers)
 
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code)
+            log.error(f"Stream request failed. Status: {response.status_code}, Response: {response.text[:200]}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to fetch stream. Response: {response.text[:200]}"
+            )
 
-        # Return the content directly
+        # Verify the content is actually M3U8
+        content = response.text
+        if not content.strip().startswith('#EXTM3U'):
+            if "errno" in content:
+                # Parse the error response
+                try:
+                    error_data = response.json()
+                    log.error(f"TeraBox API error: {error_data}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"TeraBox API error: {error_data.get('errmsg', 'Unknown error')}"
+                    )
+                except ValueError:
+                    pass
+            log.error(f"Invalid M3U8 content received: {content[:200]}")
+            raise HTTPException(status_code=400, detail="Invalid M3U8 content received")
+
+        # Return the content with appropriate headers
         return Response(
-            content=response.text,
-            media_type="application/vnd.apple.mpegurl"
+            content=content,
+            media_type="application/vnd.apple.mpegurl",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
         )
+
+    except HTTPException:
+        raise
     except Exception as e:
+        log.error(f"Unexpected error in get_m3u8_stream_fast: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 def robust_get(*args, retries=3, backoff=2, **kwargs):
