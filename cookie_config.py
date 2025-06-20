@@ -16,6 +16,15 @@ COOKIES = [
 # Setup logger
 logger = logging.getLogger('cookie_manager')
 
+def robust_get(*args, retries=3, backoff=2, **kwargs):
+    for attempt in range(retries):
+        try:
+            return requests.get(*args, **kwargs)
+        except requests.exceptions.ConnectionError as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff ** attempt)
+
 class GithubCookieManager:
     def __init__(self, repo_owner, repo_name, file_path, token=None):
         """
@@ -84,7 +93,7 @@ class GithubCookieManager:
         cookies = []
         try:
             logger.info(f"Fetching cookies from GitHub: {self.raw_url}")
-            response = requests.get(self.raw_url, headers=self.headers, timeout=10)
+            response = robust_get(self.raw_url, headers=self.headers, timeout=10)
             
             if response.status_code == 200:
                 # Parse the content - could be one cookie per line

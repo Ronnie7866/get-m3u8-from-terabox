@@ -388,6 +388,15 @@ class TeraBoxExtractor:
                 log.debug(traceback.format_exc())
                 raise  # Re-raise to allow domain fallback
 
+async def robust_aiohttp_get(session, method, url, retries=3, backoff=2, **kwargs):
+    for attempt in range(retries):
+        try:
+            async with getattr(session, method)(url, **kwargs) as response:
+                return response
+        except (aiohttp.ClientConnectionError, aiohttp.ClientResponseError) as e:
+            if attempt == retries - 1:
+                raise
+            await asyncio.sleep(backoff ** attempt)
 
 async def get_m3u8_fast_stream(current_url: str) -> str:
     extractor = TeraBoxExtractor()

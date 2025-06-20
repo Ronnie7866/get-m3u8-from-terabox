@@ -318,7 +318,7 @@ async def get_streaming_url(video_filename: str, resolution: str) -> Optional[st
     headers = DEFAULT_HEADERS.copy()
     headers['Referer'] = f"https://www.1024terabox.com/play/video?path={encoded_path}&t=-1"
 
-    response = requests.get(url, params=params, headers=headers, cookies=COOKIES)
+    response = robust_get(url, params=params, headers=headers, cookies=COOKIES)
     response.raise_for_status()
 
     if response.headers.get('content-type', '').startswith('application/json'):
@@ -504,7 +504,7 @@ async def get_m3u8_stream_fast(current_url: str):
         }
 
         # Get the M3U8 content from the stream URL (not the original URL)
-        response = requests.get(stream_url, headers=headers)
+        response = robust_get(stream_url, headers=headers)
 
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code)
@@ -517,6 +517,14 @@ async def get_m3u8_stream_fast(current_url: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def robust_get(*args, retries=3, backoff=2, **kwargs):
+    for attempt in range(retries):
+        try:
+            return requests.get(*args, **kwargs)
+        except requests.exceptions.ConnectionError as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff ** attempt)
 
 def main():
     uvicorn.run("get-m3u8-stream:app", host="0.0.0.0", port=8080, reload=True)
