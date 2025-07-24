@@ -89,13 +89,7 @@ class GithubCookieManager:
         cookies = []
         try:
             logger.info(f"Fetching cookies from GitHub: {self.raw_url}")
-<<<<<<< HEAD
             response = robust_get(self.raw_url, headers=self.headers, timeout=10)
-            
-=======
-            response = requests.get(self.raw_url, headers=self.headers, timeout=10)
-
->>>>>>> 733ef160b4e19be389e4e5a17da2867d8f19cb9f
             if response.status_code == 200:
                 # Parse the content - could be one cookie per line
                 content = response.text.strip()

@@ -5,9 +5,12 @@ from typing import Optional, Dict
 
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from get_m3u8_stream_fast import get_m3u8_fast_stream
 from logger_config import setup_logger
@@ -15,31 +18,26 @@ from cookie_config import cookie_manager
 
 log = setup_logger("get-m3u8-stream")
 
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="TeraBox Streaming API",
     description="API to extract streaming URLs from TeraBox share links",
     version="1.0.0"
 )
 
+# Add rate limiting state and exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://player.teraboxdl.site",  # Your player domain
-        "http://player.teraboxdl.site",   # In case HTTP is used
-        "https://www.teraboxdl.site",     # Main site
-        "http://www.teraboxdl.site",
-        "https://teraboxdl.site",
-        "http://teraboxdl.site",
-        "http://localhost",               # For local development
-        "http://localhost:3000",
-        "http://127.0.0.1",
-        "http://127.0.0.1:3000"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],  # Specify the HTTP methods you need
-    allow_headers=["*"],                       # Allow all headers
-    expose_headers=["*"],                      # Expose all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
     max_age=3600,                             # Cache preflight requests for 1 hour
 )
 
@@ -361,7 +359,9 @@ async def get_streaming_content(video_filename: str, resolution: str) -> Optiona
 
 
 @app.get("/get_m3u8")
+@limiter.limit("5/minute")
 async def get_m3u8(
+        request: Request,
         url: str = Query(..., description="TeraBox sharing URL"),
         quality: str = Query("720", description="Desired quality (360, 480, 720, 1080)"),
         target_path: str = Query("/", description="Target path in TeraBox storage to save the file")
@@ -417,12 +417,14 @@ async def get_m3u8(
 
 # Health check endpoint
 @app.get("/health")
-async def health_check():
+@limiter.limit("2/minute")
+async def health_check(request: Request):
     """Health check endpoint to verify API status"""
     return {"status": "healthy", "version": "1.0.0"}
 
 @app.get("/refresh_cookies")
-async def refresh_cookies():
+@limiter.limit("5/minute")
+async def refresh_cookies(request: Request):
     """Force refresh cookies from GitHub repository for get_m3u8_stream_fast only"""
     try:
         new_cookie = cookie_manager.force_refresh()
@@ -485,7 +487,8 @@ def parse_netscape_cookie(cookie_data: str) -> Dict[str, str]:
         return {}
 
 @app.post("/update_cookie", response_model=CookieUpdateResponse)
-async def update_cookie(request: CookieUpdateRequest):
+@limiter.limit("3/minute")
+async def update_cookie(request: Request, cookie_request: CookieUpdateRequest):
     """
     Update the cookies used for TeraBox API requests
     
@@ -498,7 +501,7 @@ async def update_cookie(request: CookieUpdateRequest):
     try:
         global COOKIES
           # Parse the provided cookie data
-        new_cookies = parse_netscape_cookie(request.cookie_data)
+        new_cookies = parse_netscape_cookie(cookie_request.cookie_data)
         
         if not new_cookies:
             raise HTTPException(status_code=400, detail="Failed to parse cookie data")
@@ -520,7 +523,8 @@ async def update_cookie(request: CookieUpdateRequest):
 
 
 @app.get("/get_m3u8_stream_fast/{current_url:path}")
-async def get_m3u8_stream_fast(current_url: str):
+@limiter.limit("5/minute")
+async def get_m3u8_stream_fast(request: Request, current_url: str):
     try:
         decoded_url = urllib.parse.unquote(current_url)
         log.info(f"Processing URL: {decoded_url}")
