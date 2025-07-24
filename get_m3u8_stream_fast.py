@@ -131,7 +131,7 @@ class TeraBoxExtractor:
             url_params = await self.extract_url_params(direct_link)
 
             stream_url = (
-                f"https://www.1024tera.com/share/streaming?"
+                f"https://www.terabox.app/share/streaming?"
                 f"uk={uk}"
                 f"&shareid={share_id}"
                 f"&type=M3U8_AUTO_360"
@@ -313,6 +313,10 @@ class TeraBoxExtractor:
                         # Force refresh the cookie from GitHub
                         cookie_manager.force_refresh()
                         return False
+                    
+                    if "Invalid link" in text or "File does not exist" in text:
+                        log.error("The link is invalid or the file does not exist.")
+                        return False
 
                 default_thumbnail = find_between(text, 'og:image" content="', '"')
                 logid = find_between(text, "dp-logid=", "&")
@@ -399,28 +403,38 @@ async def robust_aiohttp_get(session, method, url, retries=3, backoff=2, **kwarg
             await asyncio.sleep(backoff ** attempt)
 
 async def get_m3u8_fast_stream(current_url: str) -> str:
-    extractor = TeraBoxExtractor()
-    try:
-        # Fetch data from the TeraBox URL
-        data = await extractor.get_data(current_url)
-        if not data:
-            log.error("Failed to fetch data from TeraBox URL")
-            return None
+    # Get the total number of available cookies
+    total_cookies = len(cookie_manager.cookies)
+    
+    # Try each cookie until one works
+    for i in range(total_cookies):
+        log.info(f"Attempt {i + 1}/{total_cookies} to fetch stream URL")
+        extractor = TeraBoxExtractor()
+        try:
+            # Fetch data from the TeraBox URL
+            data = await extractor.get_data(current_url)
+            if not data:
+                log.error("Failed to fetch data with current cookie, trying next...")
+                continue
 
-        # Retrieve the direct link
-        direct_link = data.get('structure', {}).get('direct_link')
-        if not direct_link:
-            log.error("Direct link not found in the response")
-            return None
+            # Retrieve the direct link
+            direct_link = data.get('structure', {}).get('direct_link')
+            if not direct_link:
+                log.error("Direct link not found, trying next cookie...")
+                continue
 
-        # Construct the stream URL
-        stream_url = await extractor.construct_stream_url(direct_link, extractor.uk, extractor.share_id)
-        if stream_url:
-            return stream_url
-        else:
-            log.error("Failed to construct stream URL")
-            return None
-    except Exception as e:
-        log.error(f"Unexpected error: {e}")
-        return None
+            # Construct the stream URL
+            stream_url = await extractor.construct_stream_url(direct_link, extractor.uk, extractor.share_id)
+            if stream_url:
+                log.info("Successfully generated stream URL")
+                return stream_url
+            else:
+                log.error("Failed to construct stream URL, trying next cookie...")
+                continue
+        except Exception as e:
+            log.error(f"Unexpected error on attempt {i + 1}: {e}")
+            log.debug(traceback.format_exc())
+            continue
 
+    log.error("All attempts failed. Could not generate stream URL.")
+    return None
