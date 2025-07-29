@@ -522,26 +522,17 @@ async def update_cookie(request: Request, cookie_request: CookieUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Error updating cookies: {str(e)}")
 
 
-@app.get("/get_m3u8_stream_fast/{current_url:path}")
+@app.get("/get_m3u8_stream_fast/{stream_url:path}")
 @limiter.limit("5/minute")
-async def get_m3u8_stream_fast(request: Request, current_url: str):
+async def get_m3u8_stream_fast(request: Request, stream_url: str):
     try:
-        decoded_url = urllib.parse.unquote(current_url)
-        log.info(f"Processing URL: {decoded_url}")
-
-        # Get the actual streaming URL from the share URL
-        stream_url = await get_m3u8_fast_stream(current_url)
-        if not stream_url:
-            log.error("Failed to generate streaming URL")
-            raise HTTPException(status_code=404, detail="Failed to generate streaming URL")
-
-        log.info(f"Generated stream URL: {stream_url[:100]}...")  # Log truncated URL for security
+        log.info(f"Generated stream URL: {stream_url}...")
 
         # Use fresh cookies from cookie manager
-        current_cookie = cookie_manager.get_cookie()
-        if not current_cookie:
-            log.error("No valid cookies available")
-            raise HTTPException(status_code=401, detail="No valid cookies available")
+        # current_cookie = cookie_manager.get_cookie()
+        # if not current_cookie:
+        #     log.error("No valid cookies available")
+        #     raise HTTPException(status_code=401, detail="No valid cookies available")
 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
@@ -551,11 +542,12 @@ async def get_m3u8_stream_fast(request: Request, current_url: str):
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Cookie': current_cookie  # Use cookie from cookie manager
+            'Cookie': cookie_manager.get_cookie()
         }
 
         # Get the M3U8 content from the stream URL (not the original URL)
-        response = robust_get(stream_url, headers=headers)
+        decoded_stream_url = urllib.parse.unquote(stream_url)
+        response = robust_get(decoded_stream_url, headers=headers)
 
         if response.status_code != 200:
             log.error(f"Stream request failed. Status: {response.status_code}, Response: {response.text[:200]}")
