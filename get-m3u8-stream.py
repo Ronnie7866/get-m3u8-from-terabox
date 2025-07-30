@@ -42,64 +42,56 @@ async def get_m3u8_stream_fast(request: Request, stream_url: str):
     try:
         log.info(f"Stream URL received: {stream_url}")
 
-        # Use fresh cookies from cookie manager
-        # current_cookie = cookie_manager.get_cookie()
-        # if not current_cookie:
-        #     log.error("No valid cookies available")
-        #     raise HTTPException(status_code=401, detail="No valid cookies available")
+        # Get all available cookies from the cookie manager
+        cookies = cookie_manager.cookies
+        if not cookies:
+            log.error("No valid cookies available")
+            raise HTTPException(status_code=401, detail="No valid cookies available")
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.terabox.app/',
-            'Origin': 'https://www.terabox.app',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cookie': cookie_manager.get_cookie()
-        }
-
-        # Get the M3U8 content from the stream URL (not the original URL)
+        # Get the M3U8 content from the stream URL
         decoded_stream_url = urllib.parse.unquote(stream_url)
         if "dm.1024tera.com/share/streaming" not in decoded_stream_url and "1024tera.com/share/streaming" not in decoded_stream_url:
             log.warning(f"Invalid stream URL format: {decoded_stream_url}")
             raise HTTPException(status_code=400, detail="Invalid stream URL format. Expected a TeraBox streaming URL.")
-        response = robust_get(decoded_stream_url, headers=headers)
 
-        if response.status_code != 200:
-            log.error(f"Stream request failed. Status: {response.status_code}, Response: {response.text[:200]}")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Failed to fetch stream. Response: {response.text[:200]}"
-            )
-
-        # Verify the content is actually M3U8
-        content = response.text
-        if not content.strip().startswith('#EXTM3U'):
-            if "errno" in content:
-                # Parse the error response
-                try:
-                    error_data = response.json()
-                    log.error(f"TeraBox API error: {error_data}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"TeraBox API error: {error_data.get('errmsg', 'Unknown error')}"
-                    )
-                except ValueError:
-                    pass
-            log.error(f"Invalid M3U8 content received: {content[:200]}")
-            raise HTTPException(status_code=400, detail="Invalid M3U8 content received")
-
-        # Return the content with appropriate headers
-        return Response(
-            content=content,
-            media_type="application/vnd.apple.mpegurl",
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "*",
+        # Iterate through cookies and try to fetch the stream
+        for i, cookie in enumerate(cookies):
+            log.info(f"Attempting with cookie #{i + 1}/{len(cookies)}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.terabox.app/',
+                'Origin': 'https://www.terabox.app',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Cookie': cookie
             }
-        )
+
+            response = robust_get(decoded_stream_url, headers=headers)
+
+            if response.status_code == 200:
+                content = response.text
+                if content.strip().startswith('#EXTM3U'):
+                    log.info(f"Successfully fetched M3U8 content with cookie #{i + 1}")
+                    # Return the content with appropriate headers
+                    return Response(
+                        content=content,
+                        media_type="application/vnd.apple.mpegurl",
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Methods": "GET, OPTIONS",
+                            "Access-Control-Allow-Headers": "*",
+                        }
+                    )
+                else:
+                    log.warning(f"Invalid M3U8 content with cookie #{i + 1}: {content[:200]}")
+            else:
+                log.warning(f"Stream request failed with cookie #{i + 1}. Status: {response.status_code}")
+
+        # If loop completes without success
+        log.error("All cookies failed to fetch the stream")
+        raise HTTPException(status_code=401, detail="All available cookies failed to fetch the stream.")
 
     except HTTPException:
         raise
