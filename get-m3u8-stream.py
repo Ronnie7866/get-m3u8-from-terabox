@@ -43,7 +43,7 @@ async def get_m3u8_stream_fast(request: Request, stream_url: str):
         log.info(f"Stream URL received: {stream_url}")
 
         # Get all available cookies from the cookie manager
-        cookies = cookie_manager.cookies
+        cookies = cookie_manager.dm_cookies
         if not cookies:
             log.error("No valid cookies available")
             raise HTTPException(status_code=401, detail="No valid cookies available")

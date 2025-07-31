@@ -1,187 +1,322 @@
-import os
 import time
 import logging
 import requests
-from typing import Optional, List
+import threading
+from typing import List
 
-GITHUB_REPO_OWNER = "Ronnie7866"
-GITHUB_REPO_NAME =  "Cookie"
-GITHUB_COOKIE_PATH = "teradl_I_bot-cookie.txt"
-GITHUB_TOKEN = ""
-COOKIES = []
+from config import (GITHUB_REPO_OWNER, GITHUB_REPO_NAME, GITHUB_COOKIE_PATH, GITHUB_TOKEN,
+                    PREMIUM_COOKIE_PATH, DM_COOKIE_PATH, COOKIES)
 # Setup logger
 logger = logging.getLogger('cookie_manager')
 
-def robust_get(*args, retries=3, backoff=2, **kwargs):
-    for attempt in range(retries):
-        try:
-            return requests.get(*args, **kwargs)
-        except requests.exceptions.ConnectionError as e:
-            if attempt == retries - 1:
-                raise
-            time.sleep(backoff ** attempt)
-
 class GithubCookieManager:
-    def __init__(self, repo_owner, repo_name, file_path, token=None):
+    def __init__(self, repo_owner, repo_name, token=None):
         """
         Initialize the GitHub cookie manager
-
+        
         Args:
             repo_owner: GitHub username who owns the repository
             repo_name: Name of the repository
-            file_path: Path to the cookie file in the repository
             token: Optional GitHub personal access token for private repos
         """
         self.repo_owner = repo_owner
         self.repo_name = repo_name
-        self.file_path = file_path
         self.token = token
-        self.cookies = []  # List to hold multiple cookies
-        self.current_cookie_index = 0  # Index for round-robin
-        self.last_fetch_time = 0
-        self.fetch_interval = 900  # Check GitHub every 15 minutes
+        
+        self.cookies = []
+        self.current_cookie_index = 0
+        
+        self.premium_cookies = []
+        self.current_premium_cookie_index = 0
+        
+        self.dm_cookies = []
+        self.current_dm_cookie_index = 0
 
+        self.last_fetch_times = {
+            GITHUB_COOKIE_PATH: 0,
+            PREMIUM_COOKIE_PATH: 0,
+            DM_COOKIE_PATH: 0
+        }
+        
+        self.fetch_interval = 900  # Check GitHub every 15 minutes
+        self.validation_interval = 1800  # Validate cookies every 30 minutes
+        self.last_validation_time = 0
+        self.validation_running = False
+        
         # Headers for GitHub API
         self.headers = {
             "Accept": "application/vnd.github.v3.raw",
             "User-Agent": "TeraBox-Cookie-Fetcher"
         }
-
+        
         if token:
             self.headers["Authorization"] = f"token {token}"
-
-        # URL for raw content
-        self.raw_url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/main/{file_path}"
-
+        
         # Initial load of multiple cookies from config
         self.initialize_cookies()
 
+        # Start background validation task
+        self.start_validation_task()
+    
+    def _fetch_cookies_from_path(self, file_path: str) -> List[str]:
+        """
+        Fetch cookies from a specific file path in the GitHub repository.
+        
+        Args:
+            file_path: The path to the cookie file in the repository.
+            
+        Returns:
+            A list of cookie strings.
+        """
+        cookies = []
+        raw_url = f"https://raw.githubusercontent.com/{self.repo_owner}/{self.repo_name}/main/{file_path}"
+        
+        try:
+            logger.info(f"Fetching cookies from GitHub: {raw_url}")
+            response = requests.get(raw_url, headers=self.headers, timeout=10)
+            
+            if response.status_code == 200:
+                content = response.text.strip()
+                cookie_lines = content.split('\n')
+                
+                for line in cookie_lines:
+                    line = line.strip()
+                    if line and "ndus=" in line:
+                        if line not in cookies:
+                            cookies.append(line)
+                
+                if cookies:
+                    logger.info(f"Successfully fetched {len(cookies)} cookies from {file_path}")
+                    self.last_fetch_times[file_path] = time.time()
+                else:
+                    logger.warning(f"No valid cookies found in {file_path}")
+            else:
+                logger.error(f"Failed to fetch {file_path}. Status code: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error fetching {file_path} from GitHub: {str(e)}")
+            
+        return cookies
+
     def initialize_cookies(self):
         """Initialize cookies from config and/or GitHub"""
-        # Try to fetch cookies from GitHub
-        github_cookies = self.fetch_from_github()
+        # Fetch regular, premium, and DM cookies from GitHub
+        self.cookies = self._fetch_cookies_from_path(GITHUB_COOKIE_PATH)
+        self.premium_cookies = self._fetch_cookies_from_path(PREMIUM_COOKIE_PATH)
+        self.dm_cookies = self._fetch_cookies_from_path(DM_COOKIE_PATH)
 
-        # Add cookies from config
+        # Add cookies from config as a fallback for regular cookies
         if hasattr(COOKIES, '__iter__') and not isinstance(COOKIES, str):
-            # If COOKIES is iterable (list, tuple), add all cookies
             for cookie in COOKIES:
                 if cookie and "ndus=" in cookie and cookie not in self.cookies:
                     self.cookies.append(cookie)
-
-        # Add GitHub cookies if valid and not already in the list
-        for github_cookie in github_cookies:
-            if github_cookie and github_cookie not in self.cookies:
-                self.cookies.append(github_cookie)
 
         # If no cookies were found, but we have COOKIES, use the first one
         if not self.cookies and COOKIES and len(COOKIES) > 0:
             self.cookies.append(COOKIES[0])
 
-        logger.info(f"Initialized {len(self.cookies)} cookies for round-robin usage")
-
-    def fetch_from_github(self) -> List[str]:
-        """
-        Fetch cookies from GitHub
-
-        Returns:
-            List of cookie strings
-        """
-        cookies = []
-        try:
-            logger.info(f"Fetching cookies from GitHub: {self.raw_url}")
-            response = robust_get(self.raw_url, headers=self.headers, timeout=10)
-            if response.status_code == 200:
-                # Parse the content - could be one cookie per line
-                content = response.text.strip()
-                cookie_lines = content.split('\n')
-
-                for line in cookie_lines:
-                    line = line.strip()
-                    # Validate each line as a cookie
-                    if line and "ndus=" in line:
-                        if line not in cookies:
-                            cookies.append(line)
-
-                if cookies:
-                    logger.info(f"Successfully fetched {len(cookies)} cookies from GitHub")
-                    self.last_fetch_time = time.time()
-                else:
-                    logger.error("No valid cookies found in GitHub file")
-            else:
-                logger.error(f"Failed to fetch cookies from GitHub. Status code: {response.status_code}")
-        except Exception as e:
-            logger.error(f"Error fetching cookies from GitHub: {str(e)}")
-
-        return cookies
+        logger.info(f"Initialized {len(self.cookies)} regular, {len(self.premium_cookies)} premium, and {len(self.dm_cookies)} DM cookies.")
 
     def get_cookie(self) -> str:
         """
-        Get the next cookie in round-robin fashion
+        Get the next regular cookie in round-robin fashion.
+        
+        Returns:
+            The cookie string.
+        """
+        current_time = time.time()
+        
+        if current_time - self.last_fetch_times.get(GITHUB_COOKIE_PATH, 0) > self.fetch_interval:
+            github_cookies = self._fetch_cookies_from_path(GITHUB_COOKIE_PATH)
+            new_cookies_added = 0
+            
+            for github_cookie in github_cookies:
+                if github_cookie and github_cookie not in self.cookies:
+                    self.cookies.append(github_cookie)
+                    new_cookies_added += 1
+            
+            if new_cookies_added > 0:
+                logger.info(f"Added {new_cookies_added} new regular cookies, total: {len(self.cookies)}")
+        
+        if not self.cookies:
+            logger.error("No valid regular cookies available")
+            return ""
+        
+        cookie = self.cookies[self.current_cookie_index]
+        self.current_cookie_index = (self.current_cookie_index + 1) % len(self.cookies)
+        
+        masked_cookie = cookie[:30] + "..." if len(cookie) > 30 else cookie
+        logger.info(f"Using regular cookie #{self.current_cookie_index}/{len(self.cookies)}: {masked_cookie}")
+        
+        return cookie
+
+    def get_premium_cookie(self) -> str:
+        """
+        Get the next premium cookie in round-robin fashion.
 
         Returns:
-            The cookie string
+            The premium cookie string.
         """
         current_time = time.time()
 
-        # Check if it's time to refresh cookies from GitHub
-        if current_time - self.last_fetch_time > self.fetch_interval:
-            github_cookies = self.fetch_from_github()
-            if github_cookies:
-                # Replace existing cookies with new ones from GitHub
-                self.cookies = github_cookies.copy()
-                self.current_cookie_index = 0  # Reset index when cookies list changes
-                logger.info(f"Replaced with {len(self.cookies)} new cookies from GitHub")
-            elif not self.cookies and COOKIES:  # Only use fallback if no GitHub cookies AND no existing cookies
-                self.cookies = [cookie for cookie in COOKIES if cookie and "ndus=" in cookie]
-                self.current_cookie_index = 0
-                logger.warning("No GitHub cookies available, using fallback cookies")
+        if current_time - self.last_fetch_times.get(PREMIUM_COOKIE_PATH, 0) > self.fetch_interval:
+            premium_cookies = self._fetch_cookies_from_path(PREMIUM_COOKIE_PATH)
+            new_premium_cookies_added = 0
 
-        # If we still have no cookies, return empty string
-        if not self.cookies:
-            logger.error("No valid cookies available")
+            for premium_cookie in premium_cookies:
+                if premium_cookie and premium_cookie not in self.premium_cookies:
+                    self.premium_cookies.append(premium_cookie)
+                    new_premium_cookies_added += 1
+
+            if new_premium_cookies_added > 0:
+                logger.info(f"Added {new_premium_cookies_added} new premium cookies, total: {len(self.premium_cookies)}")
+
+        if not self.premium_cookies:
+            logger.error("No valid premium cookies available")
             return ""
 
-        # Get next cookie in round-robin fashion
-        cookie = self.cookies[self.current_cookie_index]
-        
-        # Log before updating index for accurate current/total count
+        cookie = self.premium_cookies[self.current_premium_cookie_index]
+        self.current_premium_cookie_index = (self.current_premium_cookie_index + 1) % len(self.premium_cookies)
+
         masked_cookie = cookie[:30] + "..." if len(cookie) > 30 else cookie
-        logger.info(f"Using cookie #{self.current_cookie_index + 1}/{len(self.cookies)}: {masked_cookie}")
-        
-        # Update index for next call
-        self.current_cookie_index = (self.current_cookie_index + 1) % len(self.cookies)
+        logger.info(f"Using premium cookie #{self.current_premium_cookie_index}/{len(self.premium_cookies)}: {masked_cookie}")
+
         return cookie
 
-    def force_refresh(self) -> str:
+    def get_dm_cookie(self) -> str:
         """
-        Force a refresh of cookies from GitHub
+        Get the next DM cookie in round-robin fashion.
 
         Returns:
-            The current cookie value after refresh
+            The DM cookie string.
         """
-        logger.info("Forcing refresh of cookies from GitHub")
-        self.last_fetch_time = 0  # Reset the timer to force a fetch
-        github_cookies = self.fetch_from_github()
+        current_time = time.time()
 
-        if github_cookies:
-            # Replace existing cookies with new ones from GitHub
-            self.cookies = github_cookies.copy()
-            self.current_cookie_index = 0  # Reset index when cookies list changes
-            logger.info(f"Replaced with {len(self.cookies)} new cookies from GitHub")
-        elif not self.cookies and COOKIES:  # Only use fallback if no GitHub cookies AND no existing cookies
-            self.cookies = [cookie for cookie in COOKIES if cookie and "ndus=" in cookie]
-            self.current_cookie_index = 0
-            logger.warning("No GitHub cookies available, using fallback cookies")
+        if current_time - self.last_fetch_times.get(DM_COOKIE_PATH, 0) > self.fetch_interval:
+            dm_cookies = self._fetch_cookies_from_path(DM_COOKIE_PATH)
+            new_dm_cookies_added = 0
 
-        if not self.cookies:
-            logger.error("No valid cookies available")
+            for dm_cookie in dm_cookies:
+                if dm_cookie and dm_cookie not in self.dm_cookies:
+                    self.dm_cookies.append(dm_cookie)
+                    new_dm_cookies_added += 1
+
+            if new_dm_cookies_added > 0:
+                logger.info(f"Added {new_dm_cookies_added} new DM cookies, total: {len(self.dm_cookies)}")
+
+        if not self.dm_cookies:
+            logger.error("No valid DM cookies available")
             return ""
 
-        return self.get_cookie()
-# Create a singleton instance using config values
+        cookie = self.dm_cookies[self.current_dm_cookie_index]
+        self.current_dm_cookie_index = (self.current_dm_cookie_index + 1) % len(self.dm_cookies)
+
+        masked_cookie = cookie[:30] + "..." if len(cookie) > 30 else cookie
+        logger.info(f"Using DM cookie #{self.current_dm_cookie_index}/{len(self.dm_cookies)}: {masked_cookie}")
+
+        return cookie
+
+    def force_refresh(self):
+        """
+        Force a refresh of all cookies from GitHub.
+        """
+        logger.info("Forcing refresh of all cookies from GitHub")
+        self.initialize_cookies()
+        logger.info(f"After force refresh, {len(self.cookies)} regular, {len(self.premium_cookies)} premium, and {len(self.dm_cookies)} DM cookies loaded.")
+
+    def validate_cookie(self, cookie: str) -> bool:
+        """
+        Validate a single cookie by testing if it can get a dlink.
+
+        Args:
+            cookie: The cookie string to validate.
+
+        Returns:
+            True if cookie is valid, False otherwise.
+        """
+        try:
+            test_url = "https://www.1024tera.com/sharing/link?surl=CGCs3R1E3fxFW7OcaxLPEA"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+                'Cookie': cookie,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
+            response = requests.get(test_url, headers=headers, timeout=10, allow_redirects=True)
+            if "login" in response.text.lower() and "password" in response.text.lower():
+                return False
+            if "dlink" in response.text or "download" in response.text.lower():
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"Cookie validation failed: {str(e)}")
+            return False
+
+    def validate_all_cookies(self):
+        """
+        Validate all types of cookies and remove invalid ones.
+        """
+        if self.validation_running:
+            return
+        self.validation_running = True
+        logger.info("Starting cookie validation...")
+
+        try:
+            # Validate regular cookies
+            valid_cookies = [c for c in self.cookies if self.validate_cookie(c)]
+            removed_count = len(self.cookies) - len(valid_cookies)
+            if removed_count > 0:
+                logger.warning(f"Removed {removed_count} invalid regular cookies.")
+            self.cookies = valid_cookies
+            if self.current_cookie_index >= len(self.cookies):
+                self.current_cookie_index = 0
+
+            # Validate premium cookies
+            valid_premium_cookies = [c for c in self.premium_cookies if self.validate_cookie(c)]
+            removed_premium_count = len(self.premium_cookies) - len(valid_premium_cookies)
+            if removed_premium_count > 0:
+                logger.warning(f"Removed {removed_premium_count} invalid premium cookies.")
+            self.premium_cookies = valid_premium_cookies
+            if self.current_premium_cookie_index >= len(self.premium_cookies):
+                self.current_premium_cookie_index = 0
+                
+            # Validate DM cookies
+            valid_dm_cookies = [c for c in self.dm_cookies if self.validate_cookie(c)]
+            removed_dm_count = len(self.dm_cookies) - len(valid_dm_cookies)
+            if removed_dm_count > 0:
+                logger.warning(f"Removed {removed_dm_count} invalid DM cookies.")
+            self.dm_cookies = valid_dm_cookies
+            if self.current_dm_cookie_index >= len(self.dm_cookies):
+                self.current_dm_cookie_index = 0
+
+            logger.info("Cookie validation complete.")
+            logger.info(f"Remaining: {len(self.cookies)} regular, {len(self.premium_cookies)} premium, {len(self.dm_cookies)} DM cookies.")
+            self.last_validation_time = time.time()
+        except Exception as e:
+            logger.error(f"Error during cookie validation: {str(e)}")
+        finally:
+            self.validation_running = False
+
+    def start_validation_task(self):
+        """
+        Start the background validation task.
+        """
+        def validation_loop():
+            while True:
+                try:
+                    current_time = time.time()
+                    if current_time - self.last_validation_time > self.validation_interval:
+                        self.validate_all_cookies()
+                    time.sleep(60)
+                except Exception as e:
+                    logger.error(f"Error in validation loop: {str(e)}")
+                    time.sleep(60)
+
+        validation_thread = threading.Thread(target=validation_loop, daemon=True)
+        validation_thread.start()
+        logger.info("Cookie validation task started (runs every 30 minutes)")
+
+# Create a singleton instance
 cookie_manager = GithubCookieManager(
     repo_owner=GITHUB_REPO_OWNER,
     repo_name=GITHUB_REPO_NAME,
-    file_path=GITHUB_COOKIE_PATH,
     token=GITHUB_TOKEN
 )
