@@ -183,16 +183,31 @@ class GithubCookieManager:
         return cookie
 
     def get_next_dm_cookie_with_retry(self):
+        current_time = time.time()
+
+        # Check if we need to refresh DM cookies
+        if current_time - self.last_fetch_times.get(DM_COOKIE_PATH, 0) > self.fetch_interval:
+            dm_cookies = self._fetch_cookies_from_path(DM_COOKIE_PATH)
+            new_dm_cookies_added = 0
+
+            for dm_cookie in dm_cookies:
+                if dm_cookie and dm_cookie not in self.dm_cookies:
+                    self.dm_cookies.append(dm_cookie)
+                    new_dm_cookies_added += 1
+
+            if new_dm_cookies_added > 0:
+                logger.info(f"Added {new_dm_cookies_added} new DM cookies, total: {len(self.dm_cookies)}")
+
         if not self.dm_cookies:
             logger.error("No DM cookies available.")
             return None, None
 
         cookie_index_to_try = self.current_dm_cookie_index
         cookie = self.dm_cookies[cookie_index_to_try]
-        
+
         # Move to the next index for the subsequent call
         self.current_dm_cookie_index = (self.current_dm_cookie_index + 1) % len(self.dm_cookies)
-        
+
         return cookie, cookie_index_to_try
 
     def force_refresh(self):
@@ -202,6 +217,19 @@ class GithubCookieManager:
         logger.info("Forcing refresh of all cookies from GitHub")
         self.initialize_cookies()
         logger.info(f"After force refresh, {len(self.cookies)} regular, {len(self.premium_cookies)} premium, and {len(self.dm_cookies)} DM cookies loaded.")
+
+    def force_refresh_dm_cookies(self):
+        """
+        Force a refresh of DM cookies from GitHub.
+        """
+        logger.info("Forcing refresh of DM cookies from GitHub")
+        old_count = len(self.dm_cookies)
+        self.dm_cookies = self._fetch_cookies_from_path(DM_COOKIE_PATH)
+        logger.info(f"DM cookies refreshed: {old_count} -> {len(self.dm_cookies)}")
+
+        # Reset the index if it's out of bounds
+        if self.current_dm_cookie_index >= len(self.dm_cookies):
+            self.current_dm_cookie_index = 0
 
     def validate_cookie(self, cookie: str) -> bool:
         """
