@@ -42,21 +42,20 @@ async def get_m3u8_stream_fast(request: Request, stream_url: str):
     try:
         log.info(f"Stream URL received: {stream_url}")
 
-        # Get all available cookies from the cookie manager
-        cookies = cookie_manager.dm_cookies
-        if not cookies:
-            log.error("No valid cookies available")
-            raise HTTPException(status_code=401, detail="No valid cookies available")
-
-        # Get the M3U8 content from the stream URL
         decoded_stream_url = urllib.parse.unquote(stream_url)
         if "dm.1024tera.com/share/streaming" not in decoded_stream_url and "1024tera.com/share/streaming" not in decoded_stream_url:
             log.warning(f"Invalid stream URL format: {decoded_stream_url}")
             raise HTTPException(status_code=400, detail="Invalid stream URL format. Expected a TeraBox streaming URL.")
 
-        # Iterate through cookies and try to fetch the stream
-        for i, cookie in enumerate(cookies):
-            log.info(f"Attempting with cookie #{i + 1}/{len(cookies)}")
+        for i in range(len(cookie_manager.dm_cookies)):
+            cookie, cookie_index = cookie_manager.get_next_dm_cookie_with_retry()
+            if not cookie:
+                log.error("No valid cookies available")
+                raise HTTPException(status_code=401, detail="No valid cookies available")
+
+            masked_cookie = cookie
+            log.info(f"Attempting with cookie #{cookie_index + 1}/{len(cookie_manager.dm_cookies)}: {masked_cookie}")
+
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
                 'Referer': 'https://www.terabox.app/',
@@ -73,8 +72,7 @@ async def get_m3u8_stream_fast(request: Request, stream_url: str):
             if response.status_code == 200:
                 content = response.text
                 if content.strip().startswith('#EXTM3U'):
-                    log.info(f"Successfully fetched M3U8 content with cookie #{i + 1}")
-                    # Return the content with appropriate headers
+                    log.info(f"Successfully fetched M3U8 content with cookie #{cookie_index + 1}")
                     return Response(
                         content=content,
                         media_type="application/vnd.apple.mpegurl",
@@ -85,11 +83,10 @@ async def get_m3u8_stream_fast(request: Request, stream_url: str):
                         }
                     )
                 else:
-                    log.warning(f"Invalid M3U8 content with cookie #{i + 1}: {content[:200]}")
+                    log.warning(f"Invalid M3U8 content with cookie #{cookie_index + 1}, trying next. Content: {content[:200]}")
             else:
-                log.warning(f"Stream request failed with cookie #{i + 1}. Status: {response.status_code}")
+                log.warning(f"Stream request failed with cookie #{cookie_index + 1}, status {response.status_code}, trying next cookie.")
 
-        # If loop completes without success
         log.error("All cookies failed to fetch the stream")
         raise HTTPException(status_code=401, detail="All available cookies failed to fetch the stream.")
 

@@ -182,38 +182,18 @@ class GithubCookieManager:
 
         return cookie
 
-    def get_dm_cookie(self) -> str:
-        """
-        Get the next DM cookie in round-robin fashion.
-
-        Returns:
-            The DM cookie string.
-        """
-        current_time = time.time()
-
-        if current_time - self.last_fetch_times.get(DM_COOKIE_PATH, 0) > self.fetch_interval:
-            dm_cookies = self._fetch_cookies_from_path(DM_COOKIE_PATH)
-            new_dm_cookies_added = 0
-
-            for dm_cookie in dm_cookies:
-                if dm_cookie and dm_cookie not in self.dm_cookies:
-                    self.dm_cookies.append(dm_cookie)
-                    new_dm_cookies_added += 1
-
-            if new_dm_cookies_added > 0:
-                logger.info(f"Added {new_dm_cookies_added} new DM cookies, total: {len(self.dm_cookies)}")
-
+    def get_next_dm_cookie_with_retry(self):
         if not self.dm_cookies:
-            logger.error("No valid DM cookies available")
-            return ""
+            logger.error("No DM cookies available.")
+            return None, None
 
-        cookie = self.dm_cookies[self.current_dm_cookie_index]
+        cookie_index_to_try = self.current_dm_cookie_index
+        cookie = self.dm_cookies[cookie_index_to_try]
+        
+        # Move to the next index for the subsequent call
         self.current_dm_cookie_index = (self.current_dm_cookie_index + 1) % len(self.dm_cookies)
-
-        masked_cookie = cookie[:30] + "..." if len(cookie) > 30 else cookie
-        logger.info(f"Using DM cookie #{self.current_dm_cookie_index}/{len(self.dm_cookies)}: {masked_cookie}")
-
-        return cookie
+        
+        return cookie, cookie_index_to_try
 
     def force_refresh(self):
         """
