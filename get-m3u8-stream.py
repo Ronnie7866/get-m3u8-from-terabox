@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
 from logger_config import setup_logger
 from cookie_config import cookie_manager
 
@@ -15,7 +14,6 @@ log = setup_logger("get-m3u8-stream")
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
-
 app = FastAPI(
     title="TeraBox Streaming API",
     description="API to extract streaming URLs from TeraBox share links",
@@ -28,7 +26,14 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Define allowed origins for CORS
 allowed_origins = [
-    "https://player.teraboxdl.site",
+    "https://teraboxdl.site",  # Added missing comma
+    "https://playterabox.com"
+]
+
+# Define allowed referers (same as origins in this case)
+allowed_referers = [
+    "https://teraboxdl.site",
+    "https://playterabox.com"
 ]
 
 # Add CORS middleware
@@ -44,9 +49,11 @@ app.add_middleware(
 @app.get("/get_m3u8_stream_fast/{stream_url:path}")
 @limiter.limit("5/minute")
 async def get_m3u8_stream_fast(request: Request, stream_url: str):
-    # Referer check to ensure requests come from the player domain
+    # Get referer from request headers
     referer = request.headers.get("referer")
-    if not referer or not referer.startswith("https://player.teraboxdl.site"):
+
+    # Referer check to ensure requests come from allowed domains
+    if referer and not any(referer.startswith(allowed) for allowed in allowed_referers):
         log.warning(f"Forbidden request from referer: {referer}")
         raise HTTPException(status_code=403, detail="Forbidden: Invalid referer")
 
